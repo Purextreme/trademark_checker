@@ -1,6 +1,6 @@
 import gradio as gr
 from validator import validate_name
-from WIPO_name_checker import NameChecker
+from main_checker import TrademarkChecker
 import time
 import webbrowser
 from threading import Timer
@@ -12,6 +12,9 @@ logging.basicConfig(
     format='%(asctime)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+# 在创建 Gradio 界面之前，实例化单一的 TrademarkChecker
+checker = TrademarkChecker()
 
 def open_browser():
     webbrowser.open('http://127.0.0.1:7860')
@@ -30,9 +33,17 @@ def format_detailed_results(results: list[dict]) -> dict[str, str]:
         output = []
         
         if result["status"] == "error":
-            output.append(f"查询出错：{result['error_message']}")
+            output.append("❌ 查询出错")
+            if "error_details" in result and result["error_details"]:
+                output.append("错误详情：")
+                for error in result["error_details"]:
+                    output.append(f"- {error}")
+            else:
+                output.append(f"错误信息：{result.get('error_message', '未知错误')}")
         else:
-            output.append(f"搜索结果状态: {result['status_message']}")
+            if "search_source" in result:
+                output.append(f"🔍 数据来源: {', '.join(result['search_source'])}")
+            output.append(f"查询状态: {result['status_message']}")
             
             if result["total_found"] > 0:
                 output.append("\n找到的品牌:")
@@ -64,13 +75,14 @@ def format_summary(results: list[dict]) -> str:
     for result in results:
         name = result["query_name"]
         if result["status"] == "error":
-            error_names.append(name)
+            error_detail = result.get("error_message", "未知错误")
+            error_names.append(f"{name} ({error_detail})")
         elif result["has_exact_match"]:
-            existing_names.append(name)
+            existing_names.append(f"{name} ({', '.join(result['search_source'])})")
         elif result["total_displayed"] != result["total_found"]:
             warning_names.append(f"{name} (查询到{result['total_found']}个结果，但仅显示{result['total_displayed']}个，需手动复核)")
         elif result["total_found"] == 0:
-            available_names.append(name)
+            available_names.append(f"{name} ({', '.join(result['search_source'])})")
         else:
             warning_names.append(f"{name} (找到{result['total_found']}个相关结果，请查看详情)")
     
@@ -102,8 +114,8 @@ def process_query(names: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown,
     if not name_list:
         return "请输入要查询的名称", gr.Dropdown(choices=[]), {}
     
-    if len(name_list) > 10:
-        return "为避免服务器压力，每次最多查询10个名称", gr.Dropdown(choices=[]), {}
+    if len(name_list) > 20:
+        return "为避免服务器压力，每次最多查询20个名称", gr.Dropdown(choices=[]), {}
     
     try:
         total = len(name_list)
@@ -119,15 +131,20 @@ def process_query(names: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown,
                 results.append({
                     "query_name": name,
                     "status": "error",
-                    "error_message": validated_name
+                    "error_message": validated_name,
+                    "brands": [],
+                    "total_found": 0,
+                    "total_displayed": 0,
+                    "has_exact_match": False,
+                    "exact_matches": [],
+                    "search_source": []
                 })
             else:
                 valid_names.append(validated_name)
         
         if valid_names:
             progress(0.3, desc="正在查询，请稍候...")
-            # 执行查询（这会创建新的浏览器实例，查询完成后自动清理）
-            query_results = NameChecker.check_names(valid_names)
+            query_results = checker.check_trademarks(valid_names)
             results.extend(query_results)
         
         logging.info("开始生成查询报告")
@@ -162,7 +179,7 @@ def process_query(names: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown,
         return f"查询过程中出错: {error_msg}", gr.Dropdown(choices=[]), {}
 
 def show_details(choice: str, detailed_info: dict) -> str:
-    """显示选中名称��详细信息"""
+    """显示选中名称的详细信息"""
     return detailed_info.get(choice, "请选择要查看的查询结果")
 
 # 创建Gradio界面
@@ -170,13 +187,15 @@ with gr.Blocks() as demo:
     gr.Markdown("""
     # 商标名称查询工具
     
-    这个工具可以帮助您查询商标名称是否已被注册。
+    这个工具可以帮助您在 TMDN 和 WIPO 两个系统中查询商标名称是否已被注册。
     
     **使用说明：**
     1. 在下方输入框中输入要查询的名称（每行一个）
     2. 名称只能包含英文字母
     3. 不支持数字、空格和特殊字符
     4. 系统会检查完全匹配的情况
+    5. 每次最多查询20个名称
+    6. 为了提高效率，系统会先查询TMDN，如果已找到明确结果，则不再查询WIPO
     """)
     
     with gr.Row():
@@ -199,7 +218,7 @@ with gr.Blocks() as demo:
     
     submit_btn = gr.Button("查询")
     
-    # 存储详细信息的状态
+    # 存储详细信���的状态
     detailed_info_state = gr.State({})
     
     # 设置查询按钮点击事件
