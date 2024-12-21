@@ -41,6 +41,15 @@ def format_detailed_results(results: list[dict]) -> dict[str, str]:
             else:
                 output.append(f"错误信息：{result.get('error_message', '未知错误')}")
         else:
+            # 显示查询参数
+            if "search_params" in result:
+                params = result["search_params"]
+                output.append("📋 查询条件：")
+                output.append(f"- 地区: {params['region']}")
+                output.append(f"- 类别: {params['nice_class']}")
+                output.append(f"- 状态: {params['status']}")
+                output.append("")
+            
             if "search_source" in result:
                 output.append(f"🔍 数据来源: {', '.join(result['search_source'])}")
             output.append(f"查询状态: {result['status_message']}")
@@ -74,15 +83,19 @@ def format_summary(results: list[dict]) -> str:
     
     for result in results:
         name = result["query_name"]
+        sources = result.get("search_source", [])
+        params = result.get("search_params", {})
+        nice_class = params.get("nice_class", "")
+        
         if result["status"] == "error":
             error_detail = result.get("error_message", "未知错误")
             error_names.append(f"{name} ({error_detail})")
         elif result["has_exact_match"]:
-            existing_names.append(f"{name} ({', '.join(result['search_source'])})")
+            existing_names.append(f"{name} ({', '.join(sources)}) [{nice_class}]")
         elif result["total_displayed"] != result["total_found"]:
             warning_names.append(f"{name} (查询到{result['total_found']}个结果，但仅显示{result['total_displayed']}个，需手动复核)")
         elif result["total_found"] == 0:
-            available_names.append(f"{name} ({', '.join(result['search_source'])})")
+            available_names.append(f"{name} ({', '.join(sources)}) [{nice_class}]")
         else:
             warning_names.append(f"{name} (找到{result['total_found']}个相关结果，请查看详情)")
     
@@ -108,8 +121,8 @@ def format_summary(results: list[dict]) -> str:
     
     return "\n".join(summary)
 
-def process_query(names: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown, dict]:
-    logging.info("开始解析输入的名称")
+def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown, dict]:
+    logging.info(f"开始解析输入的名称，选择的类别: {nice_class}")
     name_list = parse_input_names(names)
     if not name_list:
         return "请输入要查询的名称", gr.Dropdown(choices=[]), {}
@@ -124,7 +137,7 @@ def process_query(names: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown,
         results = []
         
         for i, name in enumerate(name_list, 1):
-            progress(i/total, desc=f"验证输入: {name}")
+            progress(i/total, desc=f"验证输入: {name} ({i}/{total})")
             is_valid, validated_name = validate_name(name)
             if not is_valid:
                 logging.warning(f"名称验证失败: {name} - {validated_name}")
@@ -143,9 +156,11 @@ def process_query(names: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown,
                 valid_names.append(validated_name)
         
         if valid_names:
-            progress(0.3, desc="正在查询，请稍候...")
-            query_results = checker.check_trademarks(valid_names)
-            results.extend(query_results)
+            for i, name in enumerate(valid_names, 1):
+                progress((i/len(valid_names))*0.8 + 0.2, 
+                        desc=f"正在查询 {name} ({i}/{len(valid_names)})")
+                result = checker.check_trademark(name, nice_class)
+                results.append(result)
         
         logging.info("开始生成查询报告")
         detailed_info = format_detailed_results(results)
@@ -175,7 +190,7 @@ def process_query(names: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown,
         elif "asyncio loop" in error_msg.lower():
             error_msg = "系统繁忙，请稍后重试"
         
-        logging.error(f"处理查询时出错: {error_msg}")
+        logging.error(f"处理查��时出错: {error_msg}")
         return f"查询过程中出错: {error_msg}", gr.Dropdown(choices=[]), {}
 
 def show_details(choice: str, detailed_info: dict) -> str:
@@ -187,7 +202,7 @@ with gr.Blocks() as demo:
     gr.Markdown("""
     # 商标名称查询工具
     
-    这个工具可以帮助您在 TMDN 和 WIPO 两个系统中查询商标名称是否已被注册。
+    这个工具可以帮助您在美国商标数据库中查询商标名称是否已被注册。
     
     **使用说明：**
     1. 在下方输入框中输入要查询的名称（每行一个）
@@ -195,7 +210,8 @@ with gr.Blocks() as demo:
     3. 不支持数字、空格和特殊字符
     4. 系统会检查完全匹配的情况
     5. 每次最多查询20个名称
-    6. 为了提高效率，系统会先查询TMDN，如果已找到明确结果，则不再查询WIPO
+    6. 为了提高效率，系统会先查询TMDN，如果已找到完全匹配，则不再查询WIPO
+    7. 查询范围仅限美国市场
     """)
     
     with gr.Row():
@@ -203,6 +219,12 @@ with gr.Blocks() as demo:
             label="输入要查询的商标名称（每行一个）",
             placeholder="例如：\nmonica\nnova\njohn",
             lines=5
+        )
+        nice_class = gr.Radio(
+            choices=["14", "20", "21"],
+            value="20",
+            label="选择商标类别",
+            info="14类-贵重金属及合金等；20类-家具镜子相框等；21类-家庭或厨房用具及容器等"
         )
     
     with gr.Row():
@@ -218,13 +240,13 @@ with gr.Blocks() as demo:
     
     submit_btn = gr.Button("查询")
     
-    # 存储详细信���的状态
+    # 存储详细信息的状态
     detailed_info_state = gr.State({})
     
     # 设置查询按钮点击事件
     submit_btn.click(
         fn=process_query,
-        inputs=[input_names],
+        inputs=[input_names, nice_class],
         outputs=[summary_output, name_dropdown, detailed_info_state]
     )
     

@@ -7,6 +7,11 @@ import sys
 class WIPOChecker:
     def __init__(self):
         self.setup_logging()
+        self.nice_class_map = {
+            "14": "贵重金属及合金等",
+            "20": "家具镜子相框等",
+            "21": "家庭或厨房用具及容器等"
+        }
         
     def setup_logging(self):
         """配置日志输出格式"""
@@ -19,9 +24,13 @@ class WIPOChecker:
         root.addHandler(handler)
         root.setLevel(logging.INFO)
 
-    def search_trademark(self, query_name: str) -> Dict[str, Any]:
-        """查询单个商标名称"""
-        logging.info(f"开始查询WIPO商标: {query_name}")
+    def search_trademark(self, query_name: str, nice_class: str = "20") -> Dict[str, Any]:
+        """查询单个商标名称
+        Args:
+            query_name: 要查询的商标名称
+            nice_class: 商标类别（14/20/21）
+        """
+        logging.info(f"开始查询WIPO商标: {query_name} (类别: {nice_class} - {self.nice_class_map.get(nice_class, '')})")
         
         try:
             with sync_playwright() as playwright:
@@ -29,7 +38,12 @@ class WIPOChecker:
                 context = browser.new_context(viewport={'width': 1920, 'height': 4096})
                 page = context.new_page()
                 
-                url = f"https://branddb.wipo.int/en/similarname/results?sort=score%20desc&rows=15&asStructure=%7B%22_id%22:%227dea%22,%22boolean%22:%22AND%22,%22bricks%22:%5B%7B%22_id%22:%227deb%22,%22key%22:%22brandName%22,%22value%22:%22{query_name}%22,%22strategy%22:%22Simple%22%7D%5D%7D&fcdesignation=GB&fcdesignation=US&fcdesignation=DE&fcdesignation=EM&fcdesignation=ES&fcdesignation=FR&fcdesignation=IT&fcdesignation=CA&fcniceClass=20&fcstatus=Registered&fcstatus=Pending"
+                url = (f"https://branddb.wipo.int/en/similarname/results?sort=score%20desc&rows=15"
+                      f"&asStructure=%7B%22_id%22:%227dea%22,%22boolean%22:%22AND%22,%22bricks%22:"
+                      f"%5B%7B%22_id%22:%227deb%22,%22key%22:%22brandName%22,%22value%22:%22{query_name}%22,"
+                      f"%22strategy%22:%22Simple%22%7D%5D%7D"
+                      f"&fcdesignation=US&fcniceClass={nice_class}"
+                      f"&fcstatus=Registered&fcstatus=Pending")
                 
                 # 导航到页面
                 page.goto(url, wait_until='networkidle')
@@ -66,14 +80,24 @@ class WIPOChecker:
                     return {
                         "status": "success",
                         "brands": brand_names,
-                        "total_found": total_results
+                        "total_found": total_results,
+                        "search_params": {
+                            "region": "US",
+                            "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                            "status": "已注册或待审"
+                        }
                     }
                 else:
                     logging.info(f"WIPO查询完成: {query_name}, 未找到结果")
                     return {
                         "status": "success",
                         "brands": [],
-                        "total_found": 0
+                        "total_found": 0,
+                        "search_params": {
+                            "region": "US",
+                            "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                            "status": "已注册或待审"
+                        }
                     }
                 
         except Exception as e:
@@ -82,7 +106,12 @@ class WIPOChecker:
                 "status": "error",
                 "error_message": str(e),
                 "brands": [],
-                "total_found": 0
+                "total_found": 0,
+                "search_params": {
+                    "region": "US",
+                    "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                    "status": "已注册或待审"
+                }
             }
 
     def _extract_total_results(self, text: str) -> int:

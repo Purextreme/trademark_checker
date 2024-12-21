@@ -10,6 +10,11 @@ class TrademarkChecker:
         self.wipo_checker = WIPOChecker()
         self.tmdn_checker = TMDNNameChecker()
         self.last_tmdn_query_time = 0
+        self.nice_class_map = {
+            "14": "贵重金属及合金等",
+            "20": "家具镜子相框等",
+            "21": "家庭或厨房用具及容器等"
+        }
 
     def setup_logging(self):
         """配置日志输出格式"""
@@ -32,9 +37,13 @@ class TrademarkChecker:
         return [name for name in brand_names 
                 if query_name.lower() in name.lower().split()]
 
-    def check_trademark(self, query_name: str) -> Dict[str, Any]:
-        """检查商标在两个系统中的状态"""
-        logging.info(f"\n开始检查商标: {query_name}")
+    def check_trademark(self, query_name: str, nice_class: str = "20") -> Dict[str, Any]:
+        """检查商标在两个系统中的状态
+        Args:
+            query_name: 要查询的商标名称
+            nice_class: 商标类别（14/20/21）
+        """
+        logging.info(f"\n开始检查商标: {query_name} (类别: {nice_class} - {self.nice_class_map.get(nice_class, '')})")
         result = {
             "query_name": query_name,
             "status": "success",
@@ -45,14 +54,19 @@ class TrademarkChecker:
             "exact_matches": [],
             "status_message": "",
             "search_source": [],
-            "error_details": []  # 用于记录详细错误信息
+            "error_details": [],
+            "search_params": {
+                "region": "US",
+                "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                "status": "已注册或待审"
+            }
         }
 
         try:
             # 首先查询 TMDN
             self._wait_for_tmdn_rate_limit()
             logging.info("正在查询 TMDN...")
-            tmdn_result = self.tmdn_checker.search_trademark(query_name)
+            tmdn_result = self.tmdn_checker.search_trademark(query_name, nice_class)
             
             if tmdn_result["status"] != "success":
                 # TMDN 查询失败，直接返回错误
@@ -76,7 +90,7 @@ class TrademarkChecker:
                 # 没有完全匹配，继续查询 WIPO
                 logging.info("TMDN未找到完全匹配，继续查询WIPO...")
                 try:
-                    wipo_result = self.wipo_checker.search_trademark(query_name)
+                    wipo_result = self.wipo_checker.search_trademark(query_name, nice_class)
                     if wipo_result["status"] == "success":
                         result["brands"].extend(wipo_result["brands"])
                         result["total_found"] += wipo_result["total_found"]
@@ -124,7 +138,7 @@ class TrademarkChecker:
 
         return result
 
-    def check_trademarks(self, names: List[str]) -> List[Dict[str, Any]]:
+    def check_trademarks(self, names: List[str], nice_class: str = "20") -> List[Dict[str, Any]]:
         """批量检查多个商标名称"""
         if len(names) > 20:
             raise ValueError("每次最多可查询20个名称")
@@ -132,7 +146,7 @@ class TrademarkChecker:
         results = []
         for name in names:
             try:
-                result = self.check_trademark(name)
+                result = self.check_trademark(name, nice_class)
                 results.append(result)
             except Exception as e:
                 error_msg = f"检查商标 {name} 时出错: {str(e)}"
@@ -147,6 +161,11 @@ class TrademarkChecker:
                     "has_exact_match": False,
                     "exact_matches": [],
                     "search_source": [],
-                    "error_details": [error_msg]
+                    "error_details": [error_msg],
+                    "search_params": {
+                        "region": "US",
+                        "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                        "status": "已注册或待审"
+                    }
                 })
         return results 
