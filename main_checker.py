@@ -17,14 +17,12 @@ class TrademarkChecker:
             "21": "家庭或厨房用具及容器等"
         }
         self.checked_names_file = "checked_name.txt"
+        self.load_local_db()
 
     def setup_logging(self):
         """配置日志输出格式"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
 
     def _wait_for_tmdn_rate_limit(self):
         """确保TMDN查询间隔至少1秒"""
@@ -35,13 +33,17 @@ class TrademarkChecker:
         self.last_tmdn_query_time = time.time()
 
     def _check_exact_match(self, query_name: str, brand_names: List[str]) -> List[str]:
-        """检查是否存在完全匹配"""
+        """检查是否存在完全匹配
+        对于在线查询：只要包含这个单词就算匹配，例如 nova 查到 nova red 也算匹配
+        """
         query_name = query_name.lower().strip()
         return [name for name in brand_names 
                 if query_name in [word.lower().strip() for word in name.split()]]
 
     def _check_similar_match(self, query_name: str, brand_names: List[str]) -> List[str]:
-        """检查是否存在相似匹配（仅一个字母不同）"""
+        """检查是否存在相似匹配（仅一个字母不同）
+        对于在线查询：只在单词级别比较，例如 nova 和 nove 算相似，但 nove 和 nove red 不算相似
+        """
         query_name = query_name.lower().strip()
         similar_matches = []
         
@@ -59,33 +61,37 @@ class TrademarkChecker:
         
         return similar_matches
 
-    def _check_local_database(self, query_name: str) -> Tuple[bool, str, List[str], List[str]]:
+    def _check_local_database(self, query_name: str) -> bool:
         """检查本地数据库
+        只检查完全相同的名称（去除首尾空格后）
         Returns:
-            (是否找到匹配, 匹配类型, 完全匹配列表, 相似匹配列表)
+            是否在本地数据库中找到完全相同的名称
         """
         if not os.path.exists(self.checked_names_file):
-            return False, "", [], []
+            return False
 
         try:
+            query_name = query_name.lower().strip()
             with open(self.checked_names_file, 'r', encoding='utf-8') as f:
-                checked_names = [line.strip() for line in f.readlines()]
-
-            # 检查完全匹配
-            exact_matches = self._check_exact_match(query_name, checked_names)
-            if exact_matches:
-                return True, "exact", exact_matches, []
-
-            # 检查相似匹配
-            similar_matches = self._check_similar_match(query_name, checked_names)
-            if similar_matches:
-                return True, "similar", [], similar_matches
-
-            return False, "", [], []
+                checked_names = {line.strip().lower() for line in f.readlines()}
+            
+            return query_name in checked_names
 
         except Exception as e:
             logging.error(f"读取本地数据库出错: {str(e)}")
-            return False, "", [], []
+            return False
+
+    def load_local_db(self):
+        """加载本地数据库"""
+        try:
+            with open(self.checked_names_file, 'r', encoding='utf-8') as f:
+                self.local_db = {name.strip().lower() for name in f.readlines() if name.strip()}
+        except FileNotFoundError:
+            self.local_db = set()
+
+    def check_local_db(self, name: str) -> bool:
+        """检查名称是否在本地数据库中"""
+        return name.lower() in self.local_db
 
     def check_trademark(self, query_name: str, nice_class: str = "20") -> Dict[str, Any]:
         """检查商标在两个系统中的状态
@@ -101,11 +107,11 @@ class TrademarkChecker:
             "total_found": 0,
             "total_displayed": 0,
             "has_exact_match": False,
-            "has_similar_match": False,  # 新增：是否有相似匹配
+            "has_similar_match": False,
             "exact_matches": [],
-            "similar_matches": [],  # 新增：相似匹配列表
+            "similar_matches": [],
             "status_message": "",
-            "search_source": ["本地数据库"],  # 默认包含本地数据库
+            "search_source": ["本地数据库"],
             "error_details": [],
             "search_params": {
                 "region": "US",
@@ -116,18 +122,10 @@ class TrademarkChecker:
 
         try:
             # 首先检查本地数据库
-            found, match_type, exact_matches, similar_matches = self._check_local_database(query_name)
-            if found:
-                if match_type == "exact":
-                    result["has_exact_match"] = True
-                    result["exact_matches"].extend(exact_matches)
-                    result["status_message"] = "在本地数据库中发现完全匹配"
-                    return result
-                elif match_type == "similar":
-                    result["has_similar_match"] = True
-                    result["similar_matches"].extend(similar_matches)
-                    result["status_message"] = "在本地数据库中发现相似匹配"
-                    return result
+            if self._check_local_database(query_name):
+                result["in_local_db"] = True
+                result["status_message"] = "该名称已经查询过"
+                return result
 
             # 本地未找到，查询 TMDN
             self._wait_for_tmdn_rate_limit()
@@ -202,7 +200,7 @@ class TrademarkChecker:
                 elif result["has_similar_match"]:
                     result["status_message"] += "，包含相似匹配项"
                 result["status_message"] += f" (数据来源: {', '.join(result['search_source'])})"
-
+            
         except Exception as e:
             error_msg = f"查询过程出错: {str(e)}"
             logging.error(error_msg)
@@ -215,7 +213,7 @@ class TrademarkChecker:
     def check_trademarks(self, names: List[str], nice_class: str = "20") -> List[Dict[str, Any]]:
         """批量检查多个商标名称"""
         if len(names) > 20:
-            raise ValueError("每次最多可查询20个名称")
+            raise ValueError("次最多可查询20个名称")
             
         results = []
         for name in names:

@@ -1,15 +1,36 @@
+# -*- coding: utf-8 -*-
 import gradio as gr
 from validator import validate_name
 from main_checker import TrademarkChecker
 import time
 import webbrowser
 from threading import Timer
+import logging
+from logging.handlers import RotatingFileHandler
+
+# 清空日志文件
+with open('debug.log', 'w', encoding='utf-8') as f:
+    f.write('')  # 清空文件内容
+
+# 配置日志
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        RotatingFileHandler(
+            'debug.log',
+            maxBytes=1024*1024,  # 1MB
+            backupCount=1,  # 只保留一个备份文件
+            encoding='utf-8'
+        )
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info("Starting application...")
 
 # 实例化 TrademarkChecker
 checker = TrademarkChecker()
-
-def open_browser():
-    webbrowser.open('http://127.0.0.1:7860')
 
 def parse_input_names(text: str) -> list[str]:
     """解析输入的多个名称"""
@@ -65,7 +86,7 @@ def format_detailed_results(results: list[dict]) -> dict[str, str]:
                     output.append(f"\n⚠️ 注意：总共有{result['total_found']}个结果，但只显示了{result['total_displayed']}个。")
                     output.append("建议手动复核完整结果")
                 else:
-                    output.append("\n✅ 未发现完全匹配或相似的品牌名称，但请仔细审查相似名称。")
+                    output.append("\n✅ 未发现完全匹配或相似的品牌名称，但请仔细复核名称。")
         
         detailed_info[query_name] = "\n".join(output)
     
@@ -78,11 +99,15 @@ def format_summary(results: list[dict]) -> str:
     available_names = []
     warning_names = []
     error_names = []
+    local_match_names = []  # 本地数据库匹配的列表
     
     for result in results:
         name = result["query_name"]
         
-        if result["status"] == "error":
+        # 优先检查本地数据库匹配
+        if result.get("in_local_db", False):  # 修改检查标志
+            local_match_names.append(name)
+        elif result["status"] == "error":
             error_detail = result.get("error_message", "未知错误")
             error_names.append(f"{name}")
         elif result["has_exact_match"]:
@@ -97,13 +122,18 @@ def format_summary(results: list[dict]) -> str:
             warning_names.append(f"{name} (找到{result['total_found']}个相关结果，请查看详情)")
     
     summary = []
+    if local_match_names:  # 添加本地数据库匹配的结果
+        summary.append("😊 以下名称之前已经查询过啦：")
+        summary.extend(f"- {name}" for name in local_match_names)
+        summary.append("")
+    
     if existing_names:
-        summary.append("❌ 以下名称已存在完全匹配：")
+        summary.append("❌ 以下名称存在完全匹配：")
         summary.extend(f"- {name}" for name in existing_names)
         summary.append("")
     
     if similar_names:
-        summary.append("❌ 以下名称已存在相似匹配（仅一个字母不同）：")
+        summary.append("❌ 以下名称存在相似匹配（仅一个字母不同）：")
         summary.extend(f"- {name}" for name in similar_names)
         summary.append("")
     
@@ -113,7 +143,7 @@ def format_summary(results: list[dict]) -> str:
         summary.append("")
     
     if warning_names:
-        summary.append("⚠️ 需要注意的名称：")
+        summary.append("🤔 需要注意的名称：")
         summary.extend(f"- {name}" for name in warning_names)
         summary.append("")
     
@@ -123,15 +153,20 @@ def format_summary(results: list[dict]) -> str:
     
     return "\n".join(summary)
 
+def show_details(choice: str, detailed_info: dict) -> str:
+    """显示选中名称的详细信息"""
+    return detailed_info.get(choice, "请选择要查看的查询结果")
+
 def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown, dict]:
-    name_list = parse_input_names(names)
-    if not name_list:
-        return "请输入要查询的名称", gr.Dropdown(choices=[]), {}
-    
-    if len(name_list) > 20:
-        return "为避免服务器压力，每次最多查询20个名称", gr.Dropdown(choices=[]), {}
-    
+    """处理查询请求"""
     try:
+        name_list = parse_input_names(names)
+        if not name_list:
+            return "请输入要查询的名称", gr.Dropdown(choices=[]), {}
+        
+        if len(name_list) > 20:
+            return "为避免服务器压力，次最多查询20个名称", gr.Dropdown(choices=[]), {}
+        
         total = len(name_list)
         valid_names = []
         results = []
@@ -186,10 +221,6 @@ def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[
         
         return f"查询过程中出错: {error_msg}", gr.Dropdown(choices=[]), {}
 
-def show_details(choice: str, detailed_info: dict) -> str:
-    """显示选名称的详细信息"""
-    return detailed_info.get(choice, "请选择要查看的查询结果")
-
 # 创建Gradio界面
 with gr.Blocks() as demo:
     with gr.Tabs():
@@ -200,14 +231,14 @@ with gr.Blocks() as demo:
             这个工具可以帮助您查询商标名称是否已被注册。
             
             **使用说明：**
-            1. 在下方输入框中输入要查询的名称（每行一个）
+            1. 在下方输入框中输入要查询的名称（每行个）
             2. 商标名称需要是单个英文单词
-            3. 每次最多可以查询20个名称（避免服务器压力）
+            3. 由于 WIPO 服务器位于欧洲，查询速度非常慢，非匹配单词可能需要30s以上核查
             """)
             
             with gr.Column():
                 input_names = gr.Textbox(
-                    label="输入要查询的商标名称（每行一个）",
+                    label="输入要查询的商标名称���每行一个）",
                     placeholder="例如：\nmonica\nnova\njohn",
                     lines=5
                 )
@@ -222,7 +253,7 @@ with gr.Blocks() as demo:
                     label="选择商标类别 📋",
                     info="14类-贵重金属及合金等；20类-家具镜子框等；21类-家庭或厨房用具及容器等"
                 )
-                submit_btn = gr.Button("开始查询 🚀")
+                submit_btn = gr.Button("开始查询 🚀", interactive=True)
             
             with gr.Row():
                 summary_output = gr.Textbox(label="查询结果摘要 📊", lines=10)
@@ -243,7 +274,7 @@ john"""],
                 inputs=input_names
             )
             
-        with gr.Tab("验证规则说明 📖"):
+        with gr.Tab("工具说明 📖"):
             # 读取外部Markdown文件
             with open('rules.md', 'r', encoding='utf-8') as f:
                 rules_content = f.read()
@@ -254,11 +285,18 @@ john"""],
     
     # 设置查询按钮点击事件
     submit_btn.click(
+        fn=lambda: gr.Button(value="查询中...", interactive=False),
+        outputs=submit_btn,
+        queue=False
+    ).then(
         fn=process_query,
         inputs=[input_names, nice_class],
         outputs=[summary_output, name_dropdown, detailed_info_state],
-        api_name="query",
-        concurrency_limit=1
+        api_name="query"
+    ).then(
+        fn=lambda: gr.Button(value="开始查询 🚀", interactive=True),
+        outputs=submit_btn,
+        queue=False
     )
     
     # 设置下拉选单变化事件
@@ -269,7 +307,7 @@ john"""],
     )
 
 if __name__ == "__main__":
-    demo.queue(max_size=20).launch(
+    demo.queue(max_size=10).launch(
         server_name="0.0.0.0",
         root_path="/tc",
         show_error=True
