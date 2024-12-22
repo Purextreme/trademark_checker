@@ -90,13 +90,12 @@ def format_detailed_results(results: list[dict]) -> dict[str, str]:
                         output.append(f"- {match}")
                     output.append("\n该名称可能无法使用，建议选择其他名称。")
                 elif result["has_similar_match"]:
-                    output.append("\n⚠️ 警告：发现相似的品牌名称（仅一个字母不同）：")
+                    output.append("\n⚠️ 警告：发现相似的品牌名称（长度相同且仅一个字母不同）：")
                     for match in result["similar_matches"]:
                         output.append(f"- {match}")
                     output.append("\n该名称可能无法使用，建议选择其他名称。")
-                elif result["total_displayed"] != result["total_found"]:
-                    output.append(f"\n⚠️ 注意：总共有{result['total_found']}个结果，但只显示了{result['total_displayed']}个。")
-                    output.append("建议手动复核完整结果")
+                elif result["total_found"] > 15 and "WIPO" in result.get("search_source", []):
+                    output.append(f"\n⚠️ 注意：WIPO查询到{result['total_found']}个结果，但只能显示15个，请仔细核查。")
                 else:
                     output.append("\n✅ 未发现完全匹配或相似的品牌名称，但请仔细复核名称。")
         
@@ -117,24 +116,22 @@ def format_summary(results: list[dict]) -> str:
         name = result["query_name"]
         
         # 优先检查本地数据库匹配
-        if result.get("in_local_db", False):  # 修改检查标志
+        if result.get("in_local_db", False):
             local_match_names.append(name)
         elif result["status"] == "error":
-            error_detail = result.get("error_message", "未知错误")
             error_names.append(f"{name}")
         elif result["has_exact_match"]:
             existing_names.append(name)
         elif result["has_similar_match"]:
             similar_names.append(name)
-        elif result["total_displayed"] != result["total_found"]:
-            warning_names.append(f"{name} (查询到{result['total_found']}个结果，但仅显示{result['total_displayed']}个，需手动复核)")
-        elif result["total_found"] == 0:
-            available_names.append(name)
+        elif result["total_found"] > 15 and "WIPO" in result.get("search_source", []):
+            # 只有WIPO查询超过15个结果且没有完全或相似匹配时才提示需要注意
+            warning_names.append(f"{name} (WIPO查询到{result['total_found']}个结果，但只能显示15个，请仔细核查)")
         else:
-            warning_names.append(f"{name} (找到{result['total_found']}个相关结果，请查看详情)")
+            available_names.append(name)
     
     summary = []
-    if local_match_names:  # 添加本地数据库匹配的结果
+    if local_match_names:
         summary.append("😊 以下名称之前已经查询过啦：")
         summary.extend(f"- {name}" for name in local_match_names)
         summary.append("")
@@ -145,7 +142,7 @@ def format_summary(results: list[dict]) -> str:
         summary.append("")
     
     if similar_names:
-        summary.append("❌ 以下名称存在相似匹配（仅一个字母不同）：")
+        summary.append("❌ 以下名称存在相似匹配（长度相同且仅一个字母不同）：")
         summary.extend(f"- {name}" for name in similar_names)
         summary.append("")
     
@@ -357,8 +354,9 @@ john"""],
     )
 
 if __name__ == "__main__":
+    # 启动服务器
     demo.queue(max_size=10).launch(
-        server_name="0.0.0.0",
-        root_path="/tc",
+        server_name="127.0.0.1",  # 只监听本地地址
+        server_port=3000,         # 使用3000端口
         show_error=True
     )
