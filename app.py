@@ -90,7 +90,7 @@ def format_summary(results: list[dict]) -> str:
         elif result["has_similar_match"]:
             similar_names.append(name)
         elif result["total_displayed"] != result["total_found"]:
-            warning_names.append(f"{name} (查询到{result['total_found']}个结果，但仅显��{result['total_displayed']}个，需手动复核)")
+            warning_names.append(f"{name} (查询到{result['total_found']}个结果，但仅显示{result['total_displayed']}个，需手动复核)")
         elif result["total_found"] == 0:
             available_names.append(name)
         else:
@@ -257,7 +257,8 @@ john"""],
         fn=process_query,
         inputs=[input_names, nice_class],
         outputs=[summary_output, name_dropdown, detailed_info_state],
-        api_name="query"
+        api_name="query",
+        concurrency_limit=1
     )
     
     # 设置下拉选单变化事件
@@ -268,6 +269,8 @@ john"""],
     )
 
 if __name__ == "__main__":
-    # 启动服务器并自动打开浏览器
-    Timer(2, open_browser).start()
-    demo.queue().launch()
+    demo.queue(max_size=20).launch(
+        server_name="0.0.0.0",
+        root_path="/tc",
+        show_error=True
+    )
