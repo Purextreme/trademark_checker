@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 *.log
 checked_name.txt
+checked_name.txt.lock

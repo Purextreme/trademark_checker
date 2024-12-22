@@ -4,6 +4,8 @@ from WIPO_name_checker import WIPOChecker
 from tmdn_name_checker import TMDNNameChecker
 import time
 import os
+import fcntl
+from contextlib import contextmanager
 
 class TrademarkChecker:
     def __init__(self):
@@ -17,6 +19,7 @@ class TrademarkChecker:
             "21": "家庭或厨房用具及容器等"
         }
         self.checked_names_file = "checked_name.txt"
+        self.checked_names_lock_file = "checked_name.txt.lock"
         self.load_local_db()
 
     def setup_logging(self):
@@ -33,27 +36,20 @@ class TrademarkChecker:
         self.last_tmdn_query_time = time.time()
 
     def _check_exact_match(self, query_name: str, brand_names: List[str]) -> List[str]:
-        """检查是否存在完全匹配
-        对于在线查询：只要包含这个单词就算匹配，例如 nova 查到 nova red 也算匹配
-        """
+        """检查是否存在完全匹配"""
         query_name = query_name.lower().strip()
         return [name for name in brand_names 
                 if query_name in [word.lower().strip() for word in name.split()]]
 
     def _check_similar_match(self, query_name: str, brand_names: List[str]) -> List[str]:
-        """检查是否存在相似匹配（仅一个字母不同）
-        对于在线查询：只在单词级别比较，例如 nova 和 nove 算相似，但 nove 和 nove red 不算相似
-        """
+        """检查是否存在相似匹配（仅一个字母不同）"""
         query_name = query_name.lower().strip()
         similar_matches = []
         
         for brand in brand_names:
-            # 对每个品牌名称进行分词
             for word in brand.split():
                 word = word.lower().strip()
-                # 只比较长度相同的单词
                 if len(word) == len(query_name):
-                    # 计算不同字母的数量
                     diff_count = sum(1 for a, b in zip(word, query_name) if a != b)
                     if diff_count == 1:
                         similar_matches.append(brand)
@@ -61,32 +57,91 @@ class TrademarkChecker:
         
         return similar_matches
 
+    @contextmanager
+    def file_lock(self):
+        """改进的文件锁实现，确保在任何情况下都能正确释放锁"""
+        lock_file = None
+        try:
+            # 确保锁文件目录存在
+            lock_dir = os.path.dirname(self.checked_names_lock_file)
+            if lock_dir and not os.path.exists(lock_dir):
+                os.makedirs(lock_dir, exist_ok=True)
+                
+            # 以二进制模式打开文件，避免编码问题
+            lock_file = open(self.checked_names_lock_file, 'wb')
+            
+            # 尝试获取锁，设置超时时间为10秒
+            start_time = time.time()
+            while True:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except IOError:
+                    if time.time() - start_time > 10:  # 10秒超时
+                        raise TimeoutError("无法获取文件锁，操作超时")
+                    time.sleep(0.1)
+                    
+            yield
+            
+        except Exception as e:
+            self.logger.error(f"文件锁操作出错: {str(e)}")
+            raise
+        
+        finally:
+            if lock_file is not None:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    lock_file.close()
+                except Exception as e:
+                    self.logger.error(f"释放文件锁时出错: {str(e)}")
+                    # 即使释放锁出错也继续执行
+                finally:
+                    try:
+                        # 删除锁文件
+                        if os.path.exists(self.checked_names_lock_file):
+                            os.remove(self.checked_names_lock_file)
+                    except Exception as e:
+                        self.logger.error(f"删除锁文件时出错: {str(e)}")
+
     def _check_local_database(self, query_name: str) -> bool:
-        """检查本地数据库
-        只检查完全相同的名称（去除首尾空格后）
-        Returns:
-            是否在本地数据库中找到完全相同的名称
-        """
+        """检查本地数据库，使用改进的文件锁"""
         if not os.path.exists(self.checked_names_file):
             return False
 
         try:
-            query_name = query_name.lower().strip()
-            with open(self.checked_names_file, 'r', encoding='utf-8') as f:
-                checked_names = {line.strip().lower() for line in f.readlines()}
-            
-            return query_name in checked_names
-
+            with self.file_lock():
+                query_name = query_name.lower().strip()
+                try:
+                    with open(self.checked_names_file, 'r', encoding='utf-8') as f:
+                        checked_names = {line.strip().lower() for line in f.readlines()}
+                    return query_name in checked_names
+                except Exception as e:
+                    self.logger.error(f"读取本地数据库出错: {str(e)}")
+                    return False
+        except TimeoutError:
+            self.logger.error("获取文件锁超时，跳过本地数据库检查")
+            return False
         except Exception as e:
-            logging.error(f"读取本地数据库出错: {str(e)}")
+            self.logger.error(f"检查本地数据库时出错: {str(e)}")
             return False
 
     def load_local_db(self):
-        """加载本地数据库"""
+        """加载本地数据库，使用改进的文件锁"""
         try:
-            with open(self.checked_names_file, 'r', encoding='utf-8') as f:
-                self.local_db = {name.strip().lower() for name in f.readlines() if name.strip()}
-        except FileNotFoundError:
+            with self.file_lock():
+                try:
+                    with open(self.checked_names_file, 'r', encoding='utf-8') as f:
+                        self.local_db = {name.strip().lower() for name in f.readlines() if name.strip()}
+                except FileNotFoundError:
+                    self.local_db = set()
+                except Exception as e:
+                    self.logger.error(f"加载本地数据库出错: {str(e)}")
+                    self.local_db = set()
+        except TimeoutError:
+            self.logger.error("获取文件锁超时，使用空的本地数据库")
+            self.local_db = set()
+        except Exception as e:
+            self.logger.error(f"加载本地数据库时出错: {str(e)}")
             self.local_db = set()
 
     def check_local_db(self, name: str) -> bool:
@@ -146,7 +201,7 @@ class TrademarkChecker:
             result["search_source"].append("TMDN")
             logging.info(f"TMDN 找到 {tmdn_result.get('total_found', 0)} 个结果")
 
-            # 检查 TMDN 结果中的匹配
+            # 检查 TMDN 结果��的匹配
             exact_matches = self._check_exact_match(query_name, tmdn_result["brands"])
             similar_matches = self._check_similar_match(query_name, tmdn_result["brands"])
             

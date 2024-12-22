@@ -7,6 +7,7 @@ import webbrowser
 from threading import Timer
 import logging
 from logging.handlers import RotatingFileHandler
+import threading
 
 # 清空日志文件
 with open('debug.log', 'w', encoding='utf-8') as f:
@@ -31,6 +32,17 @@ logger.info("Starting application...")
 
 # 实例化 TrademarkChecker
 checker = TrademarkChecker()
+
+# 全局查询锁
+query_lock = threading.Lock()
+# 记录当前查询状态
+current_query = {"is_querying": False, "start_time": 0}
+
+def reset_query_state():
+    """重置查询状态"""
+    global current_query
+    current_query["is_querying"] = False
+    current_query["start_time"] = 0
 
 def parse_input_names(text: str) -> list[str]:
     """解析输入的多个名称"""
@@ -159,13 +171,39 @@ def show_details(choice: str, detailed_info: dict) -> str:
 
 def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown, dict]:
     """处理查询请求"""
+    global current_query
+    lock_acquired = False
+    
     try:
+        # 检查是否有其他用户正在查询
+        if current_query["is_querying"]:
+            # 如果查询时间超过5分钟，认为是异常情况，重置锁
+            if time.time() - current_query["start_time"] > 300:
+                logger.warning("检测到异常的长时间查询，重置状态")
+                reset_query_state()
+            else:
+                logger.info("其他用户正在查询，拒绝新的查询请求")
+                return "有其他用户正在查询，请稍后再试", gr.Dropdown(choices=[]), {}
+        
+        # 尝试获取查询锁
+        if not query_lock.acquire(blocking=False):
+            logger.info("无法获取查询锁，可能有其他用户正在查询")
+            return "有其他用户正在查询，请稍后再试", gr.Dropdown(choices=[]), {}
+        
+        lock_acquired = True
+        logger.info("成功获取查询锁")
+        
+        # 设置查询状态
+        current_query["is_querying"] = True
+        current_query["start_time"] = time.time()
+        
+        # 处理查询请求
         name_list = parse_input_names(names)
         if not name_list:
             return "请输入要查询的名称", gr.Dropdown(choices=[]), {}
         
-        if len(name_list) > 20:
-            return "为避免服务器压力，次最多查询20个名称", gr.Dropdown(choices=[]), {}
+        if len(name_list) > 100:
+            return "为避免服务器压力，每次最多查询100个名称", gr.Dropdown(choices=[]), {}
         
         total = len(name_list)
         valid_names = []
@@ -208,7 +246,9 @@ def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[
             gr.Dropdown(choices=dropdown_choices, value=dropdown_choices[0] if dropdown_choices else None),
             detailed_info
         )
+        
     except Exception as e:
+        logger.error(f"查询过程发生异常: {str(e)}", exc_info=True)
         error_msg = str(e)
         if "net::" in error_msg:
             error_msg = "网络连接失败，请检查网络连接"
@@ -220,6 +260,16 @@ def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[
             error_msg = "系统繁忙，请稍后重试"
         
         return f"查询过程中出错: {error_msg}", gr.Dropdown(choices=[]), {}
+        
+    finally:
+        # 确保在所有情况下都重置状态并释放锁
+        if lock_acquired:
+            try:
+                reset_query_state()
+                query_lock.release()
+                logger.info("查询锁已释放")
+            except Exception as e:
+                logger.error(f"释放查询锁时发生错误: {str(e)}", exc_info=True)
 
 # 创建Gradio界面
 with gr.Blocks() as demo:
@@ -231,14 +281,14 @@ with gr.Blocks() as demo:
             这个工具可以帮助您查询商标名称是否已被注册。
             
             **使用说明：**
-            1. 在下方输入框中输入要查询的名称（每行个）
+            1. 在下方输入框中输入要查询的名称（每行1个）
             2. 商标名称需要是单个英文单词
             3. 由于 WIPO 服务器位于欧洲，查询速度非常慢，非匹配单词可能需要30s以上核查
             """)
             
             with gr.Column():
                 input_names = gr.Textbox(
-                    label="输入要查询的商标名称���每行一个）",
+                    label="输入要查询的商标名称（每行一个）",
                     placeholder="例如：\nmonica\nnova\njohn",
                     lines=5
                 )
@@ -251,7 +301,7 @@ with gr.Blocks() as demo:
                     choices=["14", "20", "21"],
                     value="20",
                     label="选择商标类别 📋",
-                    info="14类-贵重金属及合金等；20类-家具镜子框等；21类-家庭或厨房用具及容器等"
+                    info="14类-贵重金属及合金等；20类-家具镜子相框等；21类-家庭或厨房用具及容器等"
                 )
                 submit_btn = gr.Button("开始查询 🚀", interactive=True)
             
