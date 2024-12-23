@@ -35,8 +35,8 @@ class WIPOChecker:
                     logging.info(f"第 {attempt + 1} 次重试...")
                     time.sleep(self.retry_delay)
                 
-                # 使用更简单的加载策略
-                response = page.goto(url, wait_until='domcontentloaded')
+                # 使用 networkidle 策略来更准确地判断页面加载完成
+                response = page.goto(url, wait_until='networkidle')
                 if not response:
                     logging.error("页面加载失败，无响应")
                     continue
@@ -51,16 +51,16 @@ class WIPOChecker:
                 
                 # 检查页面内容
                 content = page.content()
-                if len(content) < 1000:  # 简单检查页面是否加载了足够的内容
+                if len(content) < 1000:
                     logging.warning(f"页面内容可能不完整，长度: {len(content)}")
                     continue
                 
                 # 等待特定元素
                 results_count = page.locator('[data-test-id="resultsCount"]')
-                results_count.wait_for(state='visible', timeout=20000)
+                results_count.wait_for(state='visible', timeout=15000)
                 
-                # 等待加载完成
-                max_loading_wait = 30
+                # 缩短最大等待时间和检查间隔
+                max_loading_wait = 15
                 start_time = time.time()
                 while time.time() - start_time < max_loading_wait:
                     text = results_count.text_content()
@@ -68,7 +68,7 @@ class WIPOChecker:
                         logging.info("页面加载完成，数据已就绪")
                         return True
                     logging.info(f"等待数据加载完成: {text}")
-                    time.sleep(2)
+                    time.sleep(1)
                 
                 logging.warning("等待加载完成超时")
                 return False
@@ -168,7 +168,7 @@ class WIPOChecker:
                     }
 
     def _extract_total_results(self, text: str) -> int:
-        """从结果状态文本中提取总结果数"""
+        """从结果状态文���中提取总结果数"""
         match = re.search(r'of (\d+) results', text)
         if match:
             return int(match.group(1))
