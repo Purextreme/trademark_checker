@@ -4,7 +4,7 @@ from WIPO_name_checker import WIPOChecker
 from tmdn_name_checker import TMDNNameChecker
 import time
 import os
-import fcntl
+import msvcrt
 from contextlib import contextmanager
 
 class TrademarkChecker:
@@ -84,7 +84,7 @@ class TrademarkChecker:
 
     @contextmanager
     def file_lock(self):
-        """改进的文件锁实现，确保在任何情况下都能正确释放锁"""
+        """Windows 专用的文件锁实现"""
         lock_file = None
         try:
             # 确保锁文件目录存在
@@ -92,14 +92,14 @@ class TrademarkChecker:
             if lock_dir and not os.path.exists(lock_dir):
                 os.makedirs(lock_dir, exist_ok=True)
                 
-            # 以二进制模式打开文件，避免编码问题
+            # 以二进制模式打开文件
             lock_file = open(self.checked_names_lock_file, 'wb')
             
             # 尝试获取锁，设置超时时间为10秒
             start_time = time.time()
             while True:
                 try:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
                     break
                 except IOError:
                     if time.time() - start_time > 10:  # 10秒超时
@@ -108,25 +108,20 @@ class TrademarkChecker:
                     
             yield
             
-        except Exception as e:
-            self.logger.error(f"文件锁操作出错: {str(e)}")
-            raise
-        
         finally:
             if lock_file is not None:
                 try:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
                     lock_file.close()
                 except Exception as e:
-                    self.logger.error(f"释放文件锁时出错: {str(e)}")
-                    # 即使释放锁出错也继续执行
+                    print(f"释放文件锁时出错: {str(e)}")
                 finally:
                     try:
                         # 删除锁文件
                         if os.path.exists(self.checked_names_lock_file):
                             os.remove(self.checked_names_lock_file)
                     except Exception as e:
-                        self.logger.error(f"删除锁文件时出错: {str(e)}")
+                        print(f"删除锁文件时出错: {str(e)}")
 
     def _check_local_database(self, query_name: str) -> bool:
         """检查本地数据库，使用改进的文件锁"""
@@ -151,7 +146,7 @@ class TrademarkChecker:
             return False
 
     def load_local_db(self):
-        """加载本地数据库，使用改进的文件锁"""
+        """加载本地数��库，使用改进的文件锁"""
         try:
             with self.file_lock():
                 try:
@@ -240,7 +235,7 @@ class TrademarkChecker:
                         result["total_found"] += wipo_result["total_found"]
                         result["search_source"].append("WIPO")
                         logging.info(f"WIPO 找到 {wipo_result['total_found']} 个结果")
-                        # 更新匹配检查，包含 WIPO 的结果
+                        # 更新匹配查，包含 WIPO 结果
                         exact_matches.extend(self._check_exact_match(query_name, wipo_result["brands"]))
                         similar_matches.extend(self._check_similar_match(query_name, wipo_result["brands"]))
                     else:
@@ -263,7 +258,7 @@ class TrademarkChecker:
                 else:
                     logging.info("TMDN已找到相似匹配，跳过WIPO查询")
 
-            # 更新显示的结果数量和匹配状态
+            # 更新显示的结果数��和匹配状态
             result["total_displayed"] = len(result["brands"])
             result["has_exact_match"] = len(exact_matches) > 0
             result["exact_matches"] = list(set(exact_matches))  # 去重
