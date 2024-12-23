@@ -36,20 +36,45 @@ class TrademarkChecker:
         self.last_tmdn_query_time = time.time()
 
     def _check_exact_match(self, query_name: str, brand_names: List[str]) -> List[str]:
-        """检查是否存在完全匹配"""
+        """检查是否存在完全匹配
+        按照rules.md中的规则：
+        - 不区分大小写
+        - 忽略首尾空格
+        - 只要包含这个单词就算匹配
+        - 作为独立单词匹配（不匹配单词的一部分）
+        """
         query_name = query_name.lower().strip()
-        return [name for name in brand_names 
-                if query_name in [word.lower().strip() for word in name.split()]]
-
-    def _check_similar_match(self, query_name: str, brand_names: List[str]) -> List[str]:
-        """检查是否存在相似匹配（仅一个字母不同）"""
-        query_name = query_name.lower().strip()
-        similar_matches = []
+        exact_matches = []
         
         for brand in brand_names:
-            for word in brand.split():
-                word = word.lower().strip()
-                if len(word) == len(query_name):
+            # 将品牌名称分割成单词
+            words = [word.lower().strip() for word in brand.split()]
+            # 只有当查询名称作为独立单词出现时才算匹配
+            if query_name in words:
+                exact_matches.append(brand)
+        
+        return exact_matches
+
+    def _check_similar_match(self, query_name: str, brand_names: List[str]) -> List[str]:
+        """检查是否存在相似匹配（仅一个字母不同）
+        按照rules.md中的规则：
+        - 只在单词级别比较（不比较词组）
+        - 只比较长度相同的单词
+        - 只有一个字母不同才算相似
+        - 不区分大小写
+        """
+        query_name = query_name.lower().strip()
+        similar_matches = []
+        query_len = len(query_name)
+        
+        for brand in brand_names:
+            # 将品牌名称分割成单独的单词
+            words = [word.lower().strip() for word in brand.split()]
+            
+            # 只比较长度相同的独立单词
+            for word in words:
+                if len(word) == query_len:
+                    # 计算不同字母的数量
                     diff_count = sum(1 for a, b in zip(word, query_name) if a != b)
                     if diff_count == 1:
                         similar_matches.append(brand)
@@ -201,7 +226,7 @@ class TrademarkChecker:
             result["search_source"].append("TMDN")
             logging.info(f"TMDN 找到 {tmdn_result.get('total_found', 0)} 个结果")
 
-            # 检查 TMDN 结果��的匹配
+            # 检查 TMDN 结果的匹配
             exact_matches = self._check_exact_match(query_name, tmdn_result["brands"])
             similar_matches = self._check_similar_match(query_name, tmdn_result["brands"])
             
