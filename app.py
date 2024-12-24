@@ -353,7 +353,7 @@ john"""],
 if __name__ == "__main__":
     # 启动服务器
     demo.queue(max_size=10).launch(
-        server_name="127.0.0.1",  # 只监听本地地址
-        server_port=3000,         # 使用3000端口
+        server_name="127.0.0.1",
+        server_port=3000,
         show_error=True
     )
