@@ -355,5 +355,10 @@ if __name__ == "__main__":
     demo.queue(max_size=10).launch(
         server_name="127.0.0.1",  # 只监听本地地址
         server_port=3000,         # 使用3000端口
-        show_error=True
+        show_error=True,
+        server_kwargs={
+            'timeout': 300,  # 设置超时时间为300秒
+            'keep_alive': True,
+            'keep_alive_timeout': 60,
+        }
     )
