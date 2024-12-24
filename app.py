@@ -277,39 +277,39 @@ with gr.Blocks() as demo:
             
             **使用说明：**
             1. 在下方输入框中输入要查询的名称（每行1个）
-            2. 由于 WIPO 服务器位于欧洲，部分查询可能较慢
+            2. 由于 WIPO 服务器位于北美，部分查询可能较慢
             """)
             
-            with gr.Column():
-                input_names = gr.Textbox(
-                    label="输入要查询的商标名称（每行一个）",
-                    placeholder="例如：\nmonica\nnova\njohn",
-                    lines=5
-                )
-                region = gr.Radio(
-                    choices=["美国"],
-                    value="美国",
-                    label="选择查询区域 🌍"
-                )
-                nice_class = gr.Radio(
-                    choices=["14", "20", "21"],
-                    value="20",
-                    label="选择商标类别 📋",
-                    info="14类-贵重金属及合金等；20类-家具镜子相框等；21类-家庭或厨房用具及容器等"
-                )
-                submit_btn = gr.Button("开始查询 🚀", interactive=True)
+            # 移除 Column 布局，直接使用组件
+            input_names = gr.Textbox(
+                label="输入要查询的商标名称（每行一个）",
+                placeholder="例如：\nmonica\nnova\njohn",
+                lines=5
+            )
+            region = gr.Radio(
+                choices=["美国"],
+                value="美国",
+                label="选择查询区域 🌍"
+            )
+            nice_class = gr.Radio(
+                choices=["14", "20", "21"],
+                value="20",
+                label="选择商标类别 📋",
+                info="14类-贵重金属及合金等；20类-家具镜子相框等；21类-家庭或厨房用具及容器等"
+            )
+            submit_btn = gr.Button("开始查询 🚀")
             
+            # 使用 Row 替代之前的布局
             with gr.Row():
                 summary_output = gr.Textbox(label="查询结果摘要 📊", lines=10)
-                with gr.Column():
-                    name_dropdown = gr.Dropdown(
-                        label="选择要查看详情的名称 👇",
-                        choices=[],
-                        value=None,
-                        interactive=True
-                    )
-                    detailed_output = gr.Textbox(label="详细结果 📝", lines=15)
-            
+                name_dropdown = gr.Dropdown(
+                    label="选择要查看详情的名称 👇",
+                    choices=[],
+                    value=None,
+                    interactive=True
+                )
+            detailed_output = gr.Textbox(label="详细结果 📝", lines=15)
+
             gr.Examples(
                 examples=[
 """monica

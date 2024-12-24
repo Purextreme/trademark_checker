@@ -35,7 +35,6 @@ class WIPOChecker:
                     logging.info(f"第 {attempt + 1} 次重试...")
                     time.sleep(self.retry_delay)
                 
-                # 使用 networkidle 策略来更准确地判断页面加载完成
                 response = page.goto(url, wait_until='networkidle')
                 if not response:
                     logging.error("页面加载失败，无响应")
@@ -55,22 +54,33 @@ class WIPOChecker:
                     logging.warning(f"页面内容可能不完整，长度: {len(content)}")
                     continue
                 
-                # 等待特定元素
+                # 等待结果计数元素出现
                 results_count = page.locator('[data-test-id="resultsCount"]')
                 results_count.wait_for(state='visible', timeout=15000)
                 
-                # 缩短最大等待时间和检查间隔
-                max_loading_wait = 15
-                start_time = time.time()
-                while time.time() - start_time < max_loading_wait:
-                    text = results_count.text_content()
-                    if text and "Loading" not in text:
-                        logging.info("页面加载完成，数据已就绪")
+                # 获取结果文本
+                count_text = results_count.text_content()
+                if not count_text:
+                    logging.warning("结果计数元素为空")
+                    continue
+                    
+                if "No results found" in count_text:
+                    logging.info("确认无搜索结果")
+                    return True
+                    
+                if "Displaying" in count_text and "results" in count_text:
+                    # 找到结果后，确保等待品牌名称加载完成
+                    time.sleep(1)  # 给一个短暂的缓冲时间
+                    try:
+                        # 等待第一个品牌名称元素出现即可
+                        page.wait_for_selector('.brandName', timeout=5000)
+                        logging.info("搜索结果和品牌名称已加载完成")
                         return True
-                    logging.info(f"等待数据加载完成: {text}")
-                    time.sleep(1)
+                    except PlaywrightTimeout:
+                        logging.error("等待品牌名称元素超时")
+                        continue
                 
-                logging.warning("等待加载完成超时")
+                logging.warning("页面内容格式不符合预期")
                 return False
                 
             except Exception as e:
@@ -168,7 +178,7 @@ class WIPOChecker:
                     }
 
     def _extract_total_results(self, text: str) -> int:
-        """从结果状态文���中提取总结果数"""
+        """从结果状态文中提取总结果数"""
         match = re.search(r'of (\d+) results', text)
         if match:
             return int(match.group(1))
