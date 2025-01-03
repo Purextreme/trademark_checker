@@ -89,15 +89,10 @@ def format_detailed_results(results: list[dict]) -> dict[str, str]:
                     for match in result["exact_matches"]:
                         output.append(f"- {match}")
                     output.append("\n该名称可能无法使用，建议选择其他名称。")
-                elif result["has_similar_match"]:
-                    output.append("\n⚠️ 警告：发现相似的品牌名称（长度相同且仅一个字母不同）：")
-                    for match in result["similar_matches"]:
-                        output.append(f"- {match}")
-                    output.append("\n该名称可能无法使用，建议选择其他名称。")
                 elif result["total_found"] > 15 and "WIPO" in result.get("search_source", []):
                     output.append(f"\n⚠️ 注意：WIPO查询到{result['total_found']}个结果，但只能显示15个，请仔细核查。")
                 else:
-                    output.append("\n✅ 未发现完全匹配或相似的品牌名称，但请仔细复核名称。")
+                    output.append("\n✅ 未发现完全匹配的品牌名称，但请仔细复核名称。")
         
         detailed_info[query_name] = "\n".join(output)
     
@@ -106,7 +101,6 @@ def format_detailed_results(results: list[dict]) -> dict[str, str]:
 def format_summary(results: list[dict]) -> str:
     """格式化所有查询结果的摘要"""
     existing_names = []
-    similar_names = []
     available_names = []
     warning_names = []
     error_names = []
@@ -122,10 +116,8 @@ def format_summary(results: list[dict]) -> str:
             error_names.append(f"{name}")
         elif result["has_exact_match"]:
             existing_names.append(name)
-        elif result["has_similar_match"]:
-            similar_names.append(name)
         elif result["total_found"] > 15 and "WIPO" in result.get("search_source", []):
-            # 只有WIPO查询超过15个结果且没有完全或相似匹配时才提示需要注意
+            # 只有WIPO查询超过15个结果且没有完全匹配时才提示需要注意
             warning_names.append(f"{name} (WIPO查询到{result['total_found']}个结果，但只能显示15个，请仔细核查)")
         else:
             available_names.append(name)
@@ -141,13 +133,8 @@ def format_summary(results: list[dict]) -> str:
         summary.extend(f"- {name}" for name in existing_names)
         summary.append("")
     
-    if similar_names:
-        summary.append("❌ 以下名称存在相似匹配（长度相同且仅一个字母不同）：")
-        summary.extend(f"- {name}" for name in similar_names)
-        summary.append("")
-    
     if available_names:
-        summary.append("✅ 以下名称未查询到匹配或相近结果：")
+        summary.append("✅ 以下名称未查询到匹配结果：")
         summary.extend(f"- {name}" for name in available_names)
         summary.append("")
     
@@ -166,7 +153,7 @@ def show_details(choice: str, detailed_info: dict) -> str:
     """显示选中名称的详细信息"""
     return detailed_info.get(choice, "请选择要查看的查询结果")
 
-def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown, dict]:
+def process_query(names: str, region: str, nice_class: str, progress=gr.Progress()) -> tuple[str, gr.Dropdown, dict]:
     """处理查询请求"""
     global current_query
     lock_acquired = False
@@ -213,22 +200,30 @@ def process_query(names: str, nice_class: str, progress=gr.Progress()) -> tuple[
                 results.append({
                     "query_name": name,
                     "status": "error",
-                    "error_message": validated_name,
+                    "error_message": f"输入格式错误: {validated_name}",
                     "brands": [],
                     "total_found": 0,
                     "total_displayed": 0,
                     "has_exact_match": False,
                     "exact_matches": [],
-                    "search_source": []
+                    "search_source": [],
+                    "search_params": {
+                        "region": region,
+                        "nice_class": nice_class,
+                        "status": "输入验证失败"
+                    }
                 })
             else:
                 valid_names.append(validated_name)
+        
+        if not valid_names:
+            return "所有输入的名称都不合法，请检查输入格式", gr.Dropdown(choices=[]), {}
         
         if valid_names:
             # 查询每个名称
             for i, name in enumerate(valid_names, 1):
                 progress(i/total, desc=f"正在查询第 {i} 个，共 {total} 个")
-                result = checker.check_trademark(name, nice_class)
+                result = checker.check_trademark(name, nice_class, region)
                 results.append(result)
         
         detailed_info = format_detailed_results(results)
@@ -287,7 +282,7 @@ with gr.Blocks() as demo:
                 lines=5
             )
             region = gr.Radio(
-                choices=["美国"],
+                choices=["美国", "美国+欧洲"],
                 value="美国",
                 label="选择查询区域 🌍"
             )
@@ -334,7 +329,7 @@ john"""],
         queue=False
     ).then(
         fn=process_query,
-        inputs=[input_names, nice_class],
+        inputs=[input_names, region, nice_class],
         outputs=[summary_output, name_dropdown, detailed_info_state],
         api_name="query"
     ).then(

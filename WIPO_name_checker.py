@@ -4,17 +4,15 @@ import logging
 from typing import Dict, Any
 import sys
 import time
+from config import WIPO_CONFIG, NICE_CLASS_MAP, QUERY_PARAMS
 
 class WIPOChecker:
     def __init__(self):
         self.setup_logging()
-        self.nice_class_map = {
-            "14": "贵重金属及合金等",
-            "20": "家具镜子相框等",
-            "21": "家庭或厨房用具及容器等"
-        }
-        self.max_retries = 3
-        self.retry_delay = 5  # 重试间隔秒数
+        self.nice_class_map = NICE_CLASS_MAP
+        self.max_retries = WIPO_CONFIG["max_retries"]
+        self.retry_delay = WIPO_CONFIG["retry_delay"]
+        self.base_url = WIPO_CONFIG["base_url"]
         
     def setup_logging(self):
         """配置日志输出格式"""
@@ -90,9 +88,29 @@ class WIPOChecker:
         
         return False
 
-    def search_trademark(self, query_name: str, nice_class: str = "20") -> Dict[str, Any]:
+    def _build_wipo_url(self, query_name: str, nice_class: str, region: str) -> str:
+        """构建WIPO查询URL"""
+        # 获取区域配置
+        region_config = WIPO_CONFIG["regions"].get(region, WIPO_CONFIG["regions"]["美国"])
+        designations = region_config["designations"]
+        
+        # 构建designation参数
+        designation_params = "&".join([f"fcdesignation={d}" for d in designations])
+        
+        url = (f"{self.base_url}?sort=score%20desc"
+               f"&rows={QUERY_PARAMS['wipo_display_limit']}"
+               f"&asStructure=%7B%22_id%22:%227dea%22,%22boolean%22:%22AND%22,%22bricks%22:"
+               f"%5B%7B%22_id%22:%227deb%22,%22key%22:%22brandName%22,%22value%22:%22{query_name}%22,"
+               f"%22strategy%22:%22Simple%22%7D%5D%7D"
+               f"&{designation_params}"
+               f"&fcniceClass={nice_class}"
+               f"&fcstatus=Registered&fcstatus=Pending")
+        
+        return url
+
+    def search_trademark(self, query_name: str, nice_class: str = "20", region: str = "美国") -> Dict[str, Any]:
         """查询单个商标名称"""
-        logging.info(f"开始查询WIPO商标: {query_name} (类别: {nice_class} - {self.nice_class_map.get(nice_class, '')})")
+        logging.info(f"开始查询WIPO商标: {query_name} (类别: {nice_class} - {self.nice_class_map.get(nice_class, '')}, 区域: {region})")
         
         for attempt in range(self.max_retries):
             try:
@@ -109,13 +127,7 @@ class WIPOChecker:
                     )
                     page = context.new_page()
                     
-                    url = (f"https://branddb.wipo.int/en/similarname/results?sort=score%20desc&rows=15"
-                          f"&asStructure=%7B%22_id%22:%227dea%22,%22boolean%22:%22AND%22,%22bricks%22:"
-                          f"%5B%7B%22_id%22:%227deb%22,%22key%22:%22brandName%22,%22value%22:%22{query_name}%22,"
-                          f"%22strategy%22:%22Simple%22%7D%5D%7D"
-                          f"&fcdesignation=US&fcniceClass={nice_class}"
-                          f"&fcstatus=Registered&fcstatus=Pending")
-                    
+                    url = self._build_wipo_url(query_name, nice_class, region)
                     logging.info(f"正在访问URL: {url}")
                     
                     if self._try_get_page_content(page, url):
@@ -143,8 +155,12 @@ class WIPOChecker:
                                 "status": "success",
                                 "brands": brand_names,
                                 "total_found": total_results,
+                                "query_name": query_name,
+                                "has_exact_match": False,
+                                "exact_matches": [],
+                                "search_source": ["WIPO"],
                                 "search_params": {
-                                    "region": "US",
+                                    "region": region,
                                     "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
                                     "status": "已注册或待审"
                                 }
@@ -155,8 +171,12 @@ class WIPOChecker:
                                 "status": "success",
                                 "brands": [],
                                 "total_found": 0,
+                                "query_name": query_name,
+                                "has_exact_match": False,
+                                "exact_matches": [],
+                                "search_source": ["WIPO"],
                                 "search_params": {
-                                    "region": "US",
+                                    "region": region,
                                     "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
                                     "status": "已注册或待审"
                                 }
@@ -170,8 +190,12 @@ class WIPOChecker:
                         "error_message": str(e),
                         "brands": [],
                         "total_found": 0,
+                        "query_name": query_name,
+                        "has_exact_match": False,
+                        "exact_matches": [],
+                        "search_source": ["WIPO"],
                         "search_params": {
-                            "region": "US",
+                            "region": region,
                             "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
                             "status": "已注册或待审"
                         }
@@ -183,3 +207,26 @@ class WIPOChecker:
         if match:
             return int(match.group(1))
         return 0
+
+def main():
+    """主函数，用于测试"""
+    checker = WIPOChecker()
+    
+    # 测试美国区域
+    print("\n测试美国区域查询:")
+    result = checker.search_trademark("monica", "14", "美国")
+    print(f"找到 {result['total_found']} 个相关商标:")
+    if result['brands']:
+        for brand in result['brands']:
+            print(f"  - {brand}")
+    
+    # 测试美国+欧洲区域
+    print("\n测试美国+欧洲区域查询:")
+    result = checker.search_trademark("monica", "14", "美国+欧洲")
+    print(f"找到 {result['total_found']} 个相关商标:")
+    if result['brands']:
+        for brand in result['brands']:
+            print(f"  - {brand}")
+
+if __name__ == "__main__":
+    main()
