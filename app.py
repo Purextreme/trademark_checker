@@ -272,7 +272,7 @@ with gr.Blocks() as demo:
             
             **使用说明：**
             1. 在下方输入框中输入要查询的名称（每行1个）
-            2. 由于 WIPO 服务器位于北美，部分查询可能较慢
+            2. 由于 WIPO 服务器巨慢，部分查询可能需要较长时间
             """)
             
             # 移除 Column 布局，直接使用组件
@@ -324,18 +324,11 @@ john"""],
     
     # 设置查询按钮点击事件
     submit_btn.click(
-        fn=lambda: gr.Button(value="查询中...", interactive=False),
-        outputs=submit_btn,
-        queue=False
-    ).then(
         fn=process_query,
         inputs=[input_names, region, nice_class],
         outputs=[summary_output, name_dropdown, detailed_info_state],
-        api_name="query"
-    ).then(
-        fn=lambda: gr.Button(value="开始查询 🚀", interactive=True),
-        outputs=submit_btn,
-        queue=False
+        api_name="query",
+        show_progress=True  # 显示进度条代替按钮状态变化
     )
     
     # 设置下拉选单变化事件
@@ -347,8 +340,12 @@ john"""],
 
 if __name__ == "__main__":
     # 启动服务器
-    demo.queue(max_size=10).launch(
+    demo.queue(
+        max_size=10,  # 限制队列最大长度
+        default_concurrency_limit=1  # 限制并发执行数为1，因为我们的查询是资源密集型的
+    ).launch(
         server_name="127.0.0.1",
         server_port=3000,
-        show_error=True
+        show_error=True,
+        max_threads=40  # 设置线程池大小
     )
