@@ -250,110 +250,90 @@ class USChecker:
 
 def test_continuous_query():
     """测试连续查询的稳定性
-    - 分两批查询，每批5个词
-    - 每批内查询间隔30秒
-    - 两批之间间隔5分钟
-    - 每次查询都是新的会话（模拟重新打开页面）
+    - 每次查询间隔2分钟
+    - 每次查询使用新的连接
+    - 记录详细的时间和结果
     """
-    # 设置日志级别为DEBUG以查看详细信息
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(message)s',
         datefmt='%H:%M:%S'
     )
     
-    # 测试词列表（分两批）
-    batch1 = ['monica', 'james', 'apple', 'orange', 'delta']
-    batch2 = ['sigma', 'alpha', 'beta', 'gamma', 'omega']
-    batches = [batch1, batch2]
+    # 测试词列表
+    test_words = [
+        'monica', 'james', 'apple', 'orange', 'delta',
+        'sigma', 'alpha', 'beta', 'gamma', 'omega'
+    ]
     
     logger = logging.getLogger("US_TEST")
-    query_interval = 10    # 批内查询间隔10秒
-    batch_interval = 300   # 批次间隔5分钟
+    query_interval = 120  # 查询间隔2分钟
     
-    logger.info(f"\n开始分批次查询测试:")
-    logger.info(f"第一批词: {', '.join(batch1)}")
-    logger.info(f"第二批词: {', '.join(batch2)}")
-    logger.info(f"批内查询间隔: {query_interval}秒")
-    logger.info(f"批次间隔: {batch_interval}秒（5分钟）")
+    logger.info(f"\n开始连续查询测试:")
+    logger.info(f"测试词列表: {', '.join(test_words)}")
+    logger.info(f"查询间隔: {query_interval}秒（2分钟）")
     logger.info("=" * 50)
     
     success_count = 0
     error_count = 0
     total_wait_time = 0
     
-    # 遍历每一批
-    for batch_index, words in enumerate(batches, 1):
-        logger.info(f"\n开始第 {batch_index} 批查询...")
-        
-        # 遍历批内的每个词
-        for i, current_word in enumerate(words):
-            try:
-                logger.info(f"\n第 {batch_index} 批 - 第 {i + 1} 个词开始查询...")
-                logger.info(f"查询词: {current_word}")
-                start_time = time.time()
-                
-                # 每次查询都创建新的查询器实例（模拟新开页面）
-                checker = USChecker()
-                
-                # 执行查询
-                result = checker.search_trademark(current_word, "20")
-                
-                # 记录查询结果
-                if result["success"]:
-                    success_count += 1
-                    if result["data"] == "NO_RESULTS":
-                        logger.info(f"查询成功: {current_word} 未找到结果")
-                    else:
-                        logger.info(f"查询成功: {current_word} 找到 {len(result['data'])} 个商标")
-                        for brand in result["data"]:
-                            logger.info(f"  - {brand}")
+    for i, current_word in enumerate(test_words):
+        try:
+            logger.info(f"\n第 {i + 1} 个词开始查询...")
+            logger.info(f"查询词: {current_word}")
+            start_time = time.time()
+            
+            # 每次查询都创建新的查询器实例
+            checker = USChecker()
+            
+            # 执行查询
+            result = checker.search_trademark(current_word, "20")
+            
+            # 记录查询结果
+            if result["success"]:
+                success_count += 1
+                if result["data"] == "NO_RESULTS":
+                    logger.info(f"查询成功: {current_word} 未找到结果")
                 else:
-                    error_count += 1
-                    logger.error(f"查询失败 ({current_word}): {result['error']}")
-                
-                # 计算实际用时
-                elapsed = time.time() - start_time
-                logger.info(f"本次查询耗时: {elapsed:.2f}秒")
-                
-                # 如果不是批内最后一个词，等待查询间隔
-                if i < len(words) - 1:
-                    wait_time = max(0, query_interval - elapsed)
-                    logger.info(f"等待 {wait_time:.2f} 秒后进行下一次查询...")
-                    logger.info(f"下一个查询词将是: {words[i+1]}")
-                    time.sleep(wait_time)
-                    total_wait_time += wait_time
-                
-            except Exception as e:
+                    logger.info(f"查询成功: {current_word} 找到 {len(result['data'])} 个商标")
+                    for brand in result["data"]:
+                        logger.info(f"  - {brand}")
+            else:
                 error_count += 1
-                logger.error(f"发生异常 ({current_word}): {str(e)}")
-                if i < len(words) - 1:
-                    logger.info(f"等待 {query_interval} 秒后继续...")
-                    time.sleep(query_interval)
-                    total_wait_time += query_interval
-        
-        # 如果不是最后一批，等待批次间隔
-        if batch_index < len(batches):
-            logger.info(f"\n第 {batch_index} 批查询完成，等待 {batch_interval} 秒（5分钟）后开始下一批...")
-            logger.info(f"下一批词: {', '.join(batches[batch_index])}")
-            time.sleep(batch_interval)
-            total_wait_time += batch_interval
+                logger.error(f"查询失败 ({current_word}): {result['error']}")
+            
+            # 计算实际用时
+            elapsed = time.time() - start_time
+            logger.info(f"本次查询耗时: {elapsed:.2f}秒")
+            
+            # 如果不是最后一个词，等待查询间隔
+            if i < len(test_words) - 1:
+                wait_time = max(0, query_interval - elapsed)
+                logger.info(f"等待 {wait_time:.2f} 秒后进行下一次查询...")
+                logger.info(f"下一个查询词将是: {test_words[i+1]}")
+                time.sleep(wait_time)
+                total_wait_time += wait_time
+            
+        except Exception as e:
+            error_count += 1
+            logger.error(f"发生异常 ({current_word}): {str(e)}")
+            if i < len(test_words) - 1:
+                logger.info(f"等待 {query_interval} 秒后继续...")
+                time.sleep(query_interval)
+                total_wait_time += query_interval
     
     # 输出统计信息
-    total_words = sum(len(batch) for batch in batches)
     logger.info("\n测试完成!")
     logger.info("=" * 50)
-    logger.info(f"总批次数: {len(batches)}")
-    logger.info(f"总查询次数: {total_words}")
+    logger.info(f"总查询次数: {len(test_words)}")
     logger.info(f"成功次数: {success_count}")
     logger.info(f"失败次数: {error_count}")
-    logger.info(f"成功率: {(success_count/total_words)*100:.1f}%")
-    logger.info(f"批内查询间隔: {query_interval}秒")
-    logger.info(f"批次间隔: {batch_interval}秒（5分钟）")
-    logger.info(f"平均等待时间: {total_wait_time/(total_words-1):.1f}秒")
+    logger.info(f"成功率: {(success_count/len(test_words))*100:.1f}%")
+    logger.info(f"查询间隔: {query_interval}秒（2分钟）")
+    logger.info(f"平均等待时间: {total_wait_time/(len(test_words)-1):.1f}秒")
     logger.info("\n查询词统计:")
-    for batch_index, words in enumerate(batches, 1):
-        logger.info(f"第{batch_index}批: {', '.join(words)}")
+    logger.info(f"测试词: {', '.join(test_words)}")
 
 def main():
     """主函数，用于测试"""
