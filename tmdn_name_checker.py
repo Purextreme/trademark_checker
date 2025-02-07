@@ -94,11 +94,7 @@ class TMDNNameChecker:
                 logging.error(error_msg)
                 return {
                     "success": False,
-                    "message": error_msg,
-                    "data": {
-                        "total": 0,
-                        "hits": []
-                    }
+                    "error": error_msg
                 }
             
             data = response.json()
@@ -113,13 +109,16 @@ class TMDNNameChecker:
             
             logging.info(f"TMDN查询完成，找到 {total_results} 个结果")
             
+            # 使用新的返回格式
+            if brands:
+                return {
+                    "success": True,
+                    "data": brands  # 直接返回商标列表
+                }
+            
             return {
                 "success": True,
-                "message": f"找到 {total_results} 个结果",
-                "data": {
-                    "total": total_results,
-                    "hits": brands
-                }
+                "data": "NO_RESULTS"
             }
             
         except Exception as e:
@@ -127,11 +126,7 @@ class TMDNNameChecker:
             logging.error(f"TMDN查询出错: {error_msg}")
             return {
                 "success": False,
-                "message": error_msg,
-                "data": {
-                    "total": 0,
-                    "hits": []
-                }
+                "error": error_msg
             }
 
 def main():

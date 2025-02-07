@@ -142,13 +142,16 @@ class USChecker:
             
             self.logger.info(f"查询完成，找到 {total} 个商标名称")
             
+            # 使用新的返回格式
+            if brand_names:
+                return {
+                    "success": True,
+                    "data": brand_names  # 直接返回商标列表
+                }
+            
             return {
                 "success": True,
-                "message": f"找到 {total} 个结果",
-                "data": {
-                    "total": total,
-                    "hits": brand_names
-                }
+                "data": "NO_RESULTS"
             }
             
         except requests.RequestException as e:
@@ -158,22 +161,14 @@ class USChecker:
                 print(f"错误响应内容: {e.response.text[:500]}")
             return {
                 "success": False,
-                "message": error_msg,
-                "data": {
-                    "total": 0,
-                    "hits": []
-                }
+                "error": error_msg
             }
         except Exception as e:
             error_msg = f"处理查询结果时发生错误: {str(e)}"
             self.logger.error(error_msg)
             return {
                 "success": False,
-                "message": error_msg,
-                "data": {
-                    "total": 0,
-                    "hits": []
-                }
+                "error": error_msg
             }
 
 def main():
@@ -193,7 +188,7 @@ def main():
         for brand in result['data']['hits']:
             print(f"  - {brand}")
     else:
-        print(f"查询失败: {result['message']}")
+        print(f"查询失败: {result['error']}")
 
 if __name__ == "__main__":
     main() 

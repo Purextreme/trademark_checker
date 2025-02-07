@@ -1,3 +1,8 @@
+import multiprocessing
+
+if __name__ == '__main__':
+    multiprocessing.freeze_support()
+
 import streamlit as st
 import logging
 from logging.handlers import RotatingFileHandler
@@ -173,12 +178,15 @@ def process_query(names: str, regions: Union[str, List[str]], nice_classes: Unio
                 result = st.session_state.checker.check_trademark(name, nice_classes, regions)
                 results.append(result)
                 progress_bar.progress((i + 1) / len(valid_names))
+            progress_bar.empty()
         
         detailed_info = format_detailed_results(results)
         
         if all(result["status"] == "error" for result in results):
             return "所有查询都失败了，可能网络问题或服务器故障，请稍后重试", [], {}
         
+        logging.info("\n查询完成")
+        logging.info("=" * 50)  # 添加分隔线使结束更明显
         return format_summary(results), list(detailed_info.keys()), detailed_info
         
     except Exception as e:
@@ -196,6 +204,8 @@ def process_query(names: str, regions: Union[str, List[str]], nice_classes: Unio
         return f"查询过程中出错: {error_msg}", [], {}
 
 def main():
+    """主函数"""
+    # 设置页面配置
     st.set_page_config(
         page_title="商标名称查询工具",
         page_icon="🔍",

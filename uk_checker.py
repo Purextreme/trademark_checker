@@ -10,8 +10,6 @@ class UKChecker:
         self.setup_logging()
         self.config = UK_CONFIG
         self._ensure_browser_installed()
-        self.playwright = None
-        self.browser = None
 
     def _ensure_browser_installed(self):
         """确保Playwright浏览器已安装"""
@@ -38,40 +36,50 @@ class UKChecker:
         self.logger.setLevel(logging.INFO)
 
     def search_trademark(self, query_name: str, nice_classes: Union[str, List[str]]) -> Dict[str, Any]:
-        """搜索英国商标（独立运行版本）"""
+        """搜索英国商标"""
         try:
-            # 每次查询都创建新的Playwright实例
             with sync_playwright() as playwright:
-                self.playwright = playwright
-                self.browser = playwright.chromium.launch(
-                    headless=True,
-                    args=['--disable-gpu', '--no-sandbox']
+                # 修改浏览器启动配置
+                browser = playwright.chromium.launch(
+                    headless=True,  # 重新启用无头模式
+                    slow_mo=100,  # 保留操作延迟
+                    args=['--start-maximized', '--disable-dev-shm-usage', '--no-sandbox']  # 添加额外的启动参数
                 )
-                
-                context = self.browser.new_context(
-                    viewport=self.config["viewport"],
-                    user_agent=self.config["user_agent"]
+                context = browser.new_context(
+                    viewport={"width": 1920, "height": 1080},  # 保留窗口大小设置
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'  # 添加用户代理
                 )
                 page = context.new_page()
                 
                 # 设置超时时间
-                page.set_default_timeout(60000)
+                page.set_default_timeout(60000)  # 保持60秒超时
                 
                 # 访问搜索页面
                 self.logger.info("访问搜索页面...")
                 page.goto(self.config["base_url"])
+                # 等待页面完全加载
+                page.wait_for_load_state('load')
                 page.wait_for_load_state('domcontentloaded')
                 page.wait_for_load_state('networkidle')
                 
+                # 确保搜索框已经可用
+                self.logger.info("等待搜索框加载...")
+                page.wait_for_selector('input[name="wordSearchPhrase"]', state='visible', timeout=30000)
+                page.wait_for_timeout(1000)  # 额外等待以确保元素完全可交互
+                
                 # 输入搜索词
                 self.logger.info("输入搜索词...")
-                search_phrase = page.wait_for_selector('input[name="wordSearchPhrase"]', state='visible')
+                search_phrase = page.locator('input[name="wordSearchPhrase"]')
                 search_phrase.fill(query_name)
                 
                 # 设置商标类别
                 self.logger.info("设置商标类别...")
                 class_input = page.wait_for_selector('input[value="Click here to select a class..."]', state='visible')
                 class_input.click()
+                
+                # 确保类别是列表形式
+                if isinstance(nice_classes, str):
+                    nice_classes = [nice_classes]
                 
                 # 选择所有指定的类别
                 for nice_class in nice_classes:
@@ -81,23 +89,27 @@ class UKChecker:
                         class_option = page.wait_for_selector(f'li[data-option-array-index="{class_config["index"]}"]', state='visible')
                         class_option.click()
                         # 等待一下以确保选择已被接受
-                        page.wait_for_timeout(500)
+                        page.wait_for_timeout(1000)  # 保持增加的等待时间
                         # 重新点击输入框以准备选择下一个类别（如果有的话）
                         if nice_class != nice_classes[-1]:  # 如果不是最后一个类别
                             page.wait_for_selector('input[value="Click here to select a class..."]', state='visible').click()
+                            page.wait_for_timeout(500)  # 保持额外等待
                 
                 # 点击页面空白处以关闭类别选择框
                 page.click('body')
+                page.wait_for_timeout(500)  # 保持额外等待
                 
                 # 设置每页显示结果数
                 self.logger.info("设置每页显示结果数...")
                 page_size = page.wait_for_selector('select[name="pageSize"]', state='visible')
                 page_size.select_option(self.config["page_size"])
+                page.wait_for_timeout(500)  # 保持额外等待
                 
                 # 设置商标状态
                 self.logger.info("设置商标状态...")
                 legal_status = page.wait_for_selector('select[name="legalStatus"]', state='visible')
                 legal_status.select_option(self.config["legal_status"])
+                page.wait_for_timeout(500)  # 保持额外等待
                 
                 # 提交搜索
                 self.logger.info("提交搜索请求...")
@@ -116,92 +128,65 @@ class UKChecker:
                 
                 # 等待页面导航完成
                 self.logger.info("等待页面加载...")
-                page.wait_for_load_state('domcontentloaded', timeout=30000)
-                
-                # 等待网络请求完成
-                self.logger.info("等待数据加载...")
-                page.wait_for_load_state('networkidle', timeout=30000)
-                
-                # 检查是否有"无结果"提示
-                self.logger.info("检查查询结果...")
-                error_summary = page.query_selector('div.error-summary')
-                if error_summary:
-                    error_text = error_summary.inner_text()
-                    if "No trade marks matching your search criteria were found" in error_text:
-                        self.logger.info("未找到匹配的商标")
-                        return {
-                            "success": True,
-                            "message": "未找到匹配的商标",
-                            "data": {
-                                "total": 0,
-                                "hits": []
-                            }
-                        }
-                
-                # 等待结果加载并解析
-                self.logger.info("等待结果显示...")
                 try:
-                    page.wait_for_selector('div.search-results', state='visible', timeout=30000)
-                except TimeoutError:
-                    # 再次检查是否有"无结果"提示
+                    # 等待页面加载完成
+                    page.wait_for_load_state('domcontentloaded', timeout=30000)
+                    page.wait_for_load_state('networkidle', timeout=30000)
+                    
+                    # 先等待一小段时间，让页面稳定
+                    page.wait_for_timeout(2000)
+                    
+                    # 检查是否有错误提示
                     error_summary = page.query_selector('div.error-summary')
-                    if error_summary and "No trade marks matching your search criteria were found" in error_summary.inner_text():
+                    if error_summary:
+                        error_text = error_summary.inner_text()
+                        if "No trade marks matching your search criteria were found" in error_text:
+                            return {
+                                "success": True,
+                                "data": "NO_RESULTS"  # 使用特殊标记表示没有结果
+                            }
+                        else:
+                            return {
+                                "success": False,
+                                "error": error_text
+                            }
+                    
+                    # 检查页面内容
+                    page_content = page.content()
+                    soup = BeautifulSoup(page_content, 'html.parser')
+                    
+                    # 提取商标名称
+                    trademarks = []
+                    results_fields = soup.find_all('div', class_='results-field')
+                    for field in results_fields:
+                        title = field.find('span', class_='title')
+                        if title and 'Mark text:' in title.text:
+                            data = field.find('span', class_='data')
+                            if data:
+                                brand_name = data.text.strip()
+                                trademarks.append(brand_name)
+                    
+                    if trademarks:
                         return {
                             "success": True,
-                            "message": "未找到匹配的商标",
-                            "data": {
-                                "total": 0,
-                                "hits": []
-                            }
+                            "data": trademarks  # 直接返回商标列表
                         }
-                    else:
-                        # 如果既没有结果也没有无结果提示，则确实是超时错误
-                        error_msg = "查询超时：服务器响应时间过长"
-                        self.logger.error(error_msg)
-                        return {
-                            "success": False,
-                            "message": error_msg,
-                            "data": {
-                                "total": 0,
-                                "hits": []
-                            }
-                        }
-                
-                self.logger.info("解析查询结果...")
-                soup = BeautifulSoup(page.content(), 'html.parser')
-                
-                # 提取商标名称
-                trademarks = []
-                for result in soup.find_all('div', class_='search-results'):
-                    mark_text = result.find('span', string='Mark text:')
-                    if mark_text and (mark_name := mark_text.find_next('span', class_='data')):
-                        brand_name = mark_name.text.strip()
-                        if brand_name:  # 确保不是空字符串
-                            trademarks.append(brand_name)
-                
-                self.logger.info(f"找到 {len(trademarks)} 个商标")
-                
-                # 关闭上下文
-                context.close()
-                return {
-                    "success": True,
-                    "message": f"找到 {len(trademarks)} 个结果",
-                    "data": {
-                        "total": len(trademarks),
-                        "hits": trademarks
+                    
+                    return {
+                        "success": True,
+                        "data": "NO_RESULTS"
                     }
-                }
+                    
+                except TimeoutError:
+                    return {
+                        "success": False,
+                        "error": "查询超时（30秒）"
+                    }
                 
         except Exception as e:
-            error_msg = f"系统错误：{str(e)}"
-            self.logger.error(error_msg)
             return {
                 "success": False,
-                "message": error_msg,
-                "data": {
-                    "total": 0,
-                    "hits": []
-                }
+                "error": str(e)
             }
 
 def main():
@@ -217,11 +202,11 @@ def main():
     print(f"查询结果: {result}")
     
     if result["success"]:
-        print(f"找到 {result['data']['total']} 个相关商标:")
-        for brand in result['data']['hits']:
+        print(f"找到 {len(result['data'])} 个相关商标:")
+        for brand in result['data']:
             print(f"  - {brand}")
     else:
-        print(f"查询失败: {result['message']}")
+        print(f"查询失败: {result['error']}")
     
     # 测试多个类别查询
     print("\n测试多个类别查询:")
@@ -229,11 +214,11 @@ def main():
     print(f"查询结果: {result}")
     
     if result["success"]:
-        print(f"找到 {result['data']['total']} 个相关商标:")
-        for brand in result['data']['hits']:
+        print(f"找到 {len(result['data'])} 个相关商标:")
+        for brand in result['data']:
             print(f"  - {brand}")
     else:
-        print(f"查询失败: {result['message']}")
+        print(f"查询失败: {result['error']}")
 
 if __name__ == "__main__":
     main() 

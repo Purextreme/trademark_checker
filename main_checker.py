@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Any, Union
 from tmdn_name_checker import TMDNNameChecker
-from uk_checker import UKChecker
+from uk_checker_process import UKCheckerProcess
 from us_checker import USChecker
 from local_db_checker import LocalDBChecker
 import time
@@ -12,11 +12,16 @@ class TrademarkChecker:
     def __init__(self):
         self.setup_logging()
         self.tmdn_checker = TMDNNameChecker()
-        self.uk_checker = UKChecker()
         self.us_checker = USChecker()
+        self.uk_checker = UKCheckerProcess()  # 使用新的进程隔离的UK查询器
         self.local_checker = LocalDBChecker()
         self.last_tmdn_query_time = 0
         self.nice_class_map = NICE_CLASS_MAP
+
+    def __del__(self):
+        """确保在对象销毁时正确关闭UK查询进程"""
+        if hasattr(self, 'uk_checker'):
+            self.uk_checker.stop_process()
 
     def setup_logging(self):
         """配置日志输出格式"""
@@ -139,28 +144,52 @@ class TrademarkChecker:
                     else:
                         result = checker.search_trademark(query_name, nice_classes)
                     
-                    if result["success"] and result["data"]:
-                        brands = result["data"]["hits"]
-                        total = result["data"]["total"]
+                    # 处理查询结果
+                    if not result["success"]:
+                        logging.error(f"{source_name}查询出错: {result.get('error', '未知错误')}")
+                        continue
+                    
+                    # 显示查询结果
+                    logging.info(f"\n{source_name}查询结果:")
+                    
+                    if result["data"] == "NO_RESULTS":
+                        logging.info("未找到任何商标")
+                        continue
+                    
+                    # 显示找到的商标
+                    trademarks = result["data"]
+                    logging.info(f"找到 {len(trademarks)} 个商标:")
+                    for trademark in trademarks:
+                        logging.info(f"  - {trademark}")
+                    logging.info("")  # 空行分隔
+                    
+                    # 进行匹配检查
+                    exact_matches = self._check_exact_match(query_name, trademarks)
+                    if exact_matches:
+                        logging.info(f"{source_name}匹配结果:")
+                        logging.info(f"找到 {len(exact_matches)} 个匹配:")
+                        for match in exact_matches:
+                            logging.info(f"  - {match}")
+                        logging.info("")  # 空行分隔
                         
-                        # 检查是否存在完全匹配
-                        exact_matches = self._check_exact_match(query_name, brands)
-                        if exact_matches:
-                            return {
-                                "query_name": query_name,
-                                "status": "success",
-                                "status_message": QUERY_STATUS["EXACT_MATCH"],
-                                "brands": brands,
-                                "total_found": total,
-                                "has_exact_match": True,
-                                "exact_matches": exact_matches,
-                                "search_source": [source_name],
-                                "search_params": {
-                                    "region": ", ".join(target_regions),
-                                    "nice_class": nice_class_display,
-                                    "status": "已注册或待审"
-                                }
+                        return {
+                            "query_name": query_name,
+                            "status": "success",
+                            "status_message": QUERY_STATUS["EXACT_MATCH"],
+                            "brands": trademarks,
+                            "total_found": len(trademarks),
+                            "has_exact_match": True,
+                            "exact_matches": exact_matches,
+                            "search_source": [source_name],
+                            "search_params": {
+                                "region": ", ".join(target_regions),
+                                "nice_class": nice_class_display,
+                                "status": "已注册或待审"
                             }
+                        }
+                    else:
+                        logging.info(f"{source_name}匹配结果: 未找到匹配")
+                        logging.info("")  # 空行分隔
                 except Exception as e:
                     logging.error(f"{source_name}查询出错: {str(e)}")
                     if source_name == "TMDN":
@@ -185,6 +214,7 @@ class TrademarkChecker:
                         }
 
             logging.info(f"当前查询顺序：{[step['source'] for step in search_steps]}")
+            logging.info("所有系统查询完成，未找到匹配")
 
             # 所有系统都查询完成，未找到匹配
             return {
@@ -225,14 +255,6 @@ class TrademarkChecker:
 def main():
     """主函数，用于测试"""
     checker = TrademarkChecker()
-    
-    # 测试单个区域和类别
-    print("\n测试单个区域和类别查询:")
-    result = checker.check_trademark("wangguan", "20", "美国")
-    print(f"找到 {result['total_found']} 个相关商标:")
-    if result['brands']:
-        for brand in result['brands']:
-            print(f"  - {brand}")
     
     # 测试多个区域和类别
     print("\n测试多个区域和类别查询:")
