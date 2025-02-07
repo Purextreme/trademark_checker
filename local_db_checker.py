@@ -1,6 +1,6 @@
 import pandas as pd
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Union, List
 from config import LOCAL_DB_CONFIG, NICE_CLASS_MAP, QUERY_STATUS
 
 class LocalDBChecker:
@@ -34,38 +34,56 @@ class LocalDBChecker:
                 self.columns["nice_class"]
             ])
 
-    def search_trademark(self, query_name: str, nice_class: str = "20", region: str = "美国") -> Dict[str, Any]:
+    def _format_nice_class_display(self, nice_classes: Union[str, List[str]]) -> str:
+        """格式化类别显示文本"""
+        if isinstance(nice_classes, str):
+            return f"{nice_classes} - {self.nice_class_map.get(nice_classes, '')}"
+        
+        display_texts = []
+        for nice_class in nice_classes:
+            display_texts.append(f"{nice_class} - {self.nice_class_map.get(nice_class, '')}")
+        return "，".join(display_texts)
+
+    def search_trademark(self, query_name: str, nice_classes: Union[str, List[str]], region: str = "美国") -> Dict[str, Any]:
         """在本地数据库中搜索商标
         Args:
             query_name: 要查询的商标名称
-            nice_class: 商标类别（14/20/21）
+            nice_classes: 商标类别（可以是单个类别字符串或类别列表）
             region: 查询区域（美国/美国+欧洲）- 本地查询不考虑区域
         """
         try:
-            logging.info(f"开始本地数据库查询: {query_name} (类别: {nice_class} - {self.nice_class_map.get(nice_class, '')})")
+            # 确保 nice_classes 是列表
+            if isinstance(nice_classes, str):
+                nice_classes = [nice_classes]
+            
+            nice_class_display = self._format_nice_class_display(nice_classes)
+            logging.info(f"开始本地数据库查询: {query_name} (类别: {nice_class_display})")
             
             if self.df is None or self.df.empty:
                 logging.warning("本地数据库为空")
-                return self._create_response(query_name, nice_class, region, False)
+                return self._create_response(query_name, nice_classes, region, False)
             
             # 转换为小写进行比较
             query_name = query_name.lower().strip()
             
-            # 在数据库中查找匹配项，只考虑名称和类别的完全匹配
-            mask = (
-                self.df[self.columns["name"]].str.lower().str.strip() == query_name
-            ) & (
-                self.df[self.columns["nice_class"]].astype(str) == str(nice_class)
-            )
+            # 在数据库中查找匹配项
+            # 1. 首先匹配名称
+            name_mask = self.df[self.columns["name"]].str.lower().str.strip() == query_name
             
-            matches = self.df[mask]
+            # 2. 然后匹配类别（任意一个类别匹配即可）
+            class_mask = self.df[self.columns["nice_class"]].astype(str).isin([str(nc) for nc in nice_classes])
+            
+            # 3. 组合两个条件
+            matches = self.df[name_mask & class_mask]
             
             if not matches.empty:
-                logging.info(f"在本地数据库中找到匹配: {query_name}")
-                return self._create_response(query_name, nice_class, region, True)
+                # 找到匹配的类别
+                matched_classes = matches[self.columns["nice_class"]].astype(str).unique().tolist()
+                logging.info(f"在本地数据库中找到匹配: {query_name} (类别: {', '.join(matched_classes)})")
+                return self._create_response(query_name, nice_classes, region, True, matched_classes)
             
             logging.info(f"本地数据库中未找到匹配: {query_name}")
-            return self._create_response(query_name, nice_class, region, False)
+            return self._create_response(query_name, nice_classes, region, False)
             
         except Exception as e:
             error_msg = f"本地数据库查询出错: {str(e)}"
@@ -82,13 +100,14 @@ class LocalDBChecker:
                 "search_source": ["本地数据库"],
                 "search_params": {
                     "region": region,
-                    "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                    "nice_class": nice_class_display,
                     "status": "本地数据库查询"
                 }
             }
 
-    def _create_response(self, query_name: str, nice_class: str, region: str, found: bool) -> Dict[str, Any]:
+    def _create_response(self, query_name: str, nice_classes: Union[str, List[str]], region: str, found: bool, matched_classes: List[str] = None) -> Dict[str, Any]:
         """创建标准的响应格式"""
+        nice_class_display = self._format_nice_class_display(nice_classes)
         return {
             "query_name": query_name,
             "status": "success",
@@ -97,10 +116,31 @@ class LocalDBChecker:
             "total_found": 1 if found else 0,
             "has_exact_match": found,
             "exact_matches": [query_name] if found else [],
+            "matched_classes": matched_classes if found else [],
             "search_source": ["本地数据库"],
             "search_params": {
                 "region": region,
-                "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                "nice_class": nice_class_display,
                 "status": "本地数据库查询"
             }
-        } 
+        }
+
+def main():
+    """主函数，用于测试"""
+    # 设置日志级别为DEBUG以查看详细信息
+    logging.basicConfig(level=logging.DEBUG)
+    
+    checker = LocalDBChecker()
+    
+    # 测试单个类别查询
+    print("\n测试单个类别查询:")
+    result = checker.search_trademark("monica", "20")
+    print(f"查询结果: {result}")
+    
+    # 测试多个类别查询
+    print("\n测试多个类别查询:")
+    result = checker.search_trademark("monica", ["14", "20"])
+    print(f"查询结果: {result}")
+
+if __name__ == "__main__":
+    main() 

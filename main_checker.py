@@ -1,7 +1,8 @@
 import logging
-from typing import List, Dict, Any, Tuple
-from WIPO_name_checker import WIPOChecker
+from typing import List, Dict, Any, Union
 from tmdn_name_checker import TMDNNameChecker
+from uk_checker import UKChecker
+from us_checker import USChecker
 from local_db_checker import LocalDBChecker
 import time
 import os
@@ -10,8 +11,9 @@ from config import NICE_CLASS_MAP, QUERY_STATUS
 class TrademarkChecker:
     def __init__(self):
         self.setup_logging()
-        self.wipo_checker = WIPOChecker()
         self.tmdn_checker = TMDNNameChecker()
+        self.uk_checker = UKChecker()
+        self.us_checker = USChecker()
         self.local_checker = LocalDBChecker()
         self.last_tmdn_query_time = 0
         self.nice_class_map = NICE_CLASS_MAP
@@ -57,106 +59,148 @@ class TrademarkChecker:
         
         return exact_matches
 
-    def check_trademark(self, query_name: str, nice_class: str = "20", region: str = "美国") -> Dict[str, Any]:
+    def _format_nice_class_display(self, nice_classes: Union[str, List[str]]) -> str:
+        """格式化类别显示文本"""
+        if isinstance(nice_classes, str):
+            return f"{nice_classes} - {self.nice_class_map.get(nice_classes, '')}"
+        
+        display_texts = []
+        for nice_class in nice_classes:
+            display_texts.append(f"{nice_class} - {self.nice_class_map.get(nice_class, '')}")
+        return "，".join(display_texts)
+
+    def check_trademark(self, query_name: str, nice_classes: Union[str, List[str]], regions: Union[str, List[str]]) -> Dict[str, Any]:
         """检查商标在各个系统中的状态
         Args:
             query_name: 要查询的商标名称
-            nice_class: 商标类别（14/20/21）
-            region: 查询区域（美国/美国+欧洲）
+            nice_classes: 商标类别（可以是单个类别字符串或类别列表）
+            regions: 查询区域（可以是单个区域字符串或区域列表）
         """
-        logging.info(f"\n开始检查商标: {query_name} (类别: {nice_class} - {self.nice_class_map.get(nice_class, '')}, 区域: {region})")
+        if isinstance(regions, str):
+            regions = [regions]
+        if isinstance(nice_classes, str):
+            nice_classes = [nice_classes]
+
+        nice_class_display = self._format_nice_class_display(nice_classes)
+        logging.info(f"\n开始检查商标: {query_name} (类别: {nice_class_display}, 区域: {', '.join(regions)})")
 
         try:
             # 1. 首先检查本地数据库
-            local_result = self.local_checker.search_trademark(query_name, nice_class, region)
+            local_result = self.local_checker.search_trademark(query_name, nice_classes, regions[0])
             if local_result["status"] == "error":
                 return local_result
             
             if local_result["in_local_db"]:
                 local_result["status_message"] = QUERY_STATUS["LOCAL_MATCH"]
+                if "matched_classes" in local_result:
+                    local_result["status_message"] += f" (类别: {', '.join(local_result['matched_classes'])})"
                 return local_result
 
-            # 2. 本地未找到，查询 TMDN
-            self._wait_for_tmdn_rate_limit()
-            logging.info("正在查询 TMDN...")
-            tmdn_result = self.tmdn_checker.search_trademark(query_name, nice_class, region)
+            # 2. 确定查询顺序和范围（根据todo.md要求）
+            search_steps = []
             
-            if tmdn_result["status"] != "success":
-                error_msg = f"TMDN查询失败: {tmdn_result.get('error_message', '未知错误')}"
-                logging.error(error_msg)
-                return {
-                    "query_name": query_name,
-                    "status": "error",
-                    "error_message": error_msg,
-                    "brands": [],
-                    "total_found": 0,
-                    "has_exact_match": False,
-                    "exact_matches": [],
-                    "search_source": ["TMDN"],
-                    "search_params": tmdn_result["search_params"]
-                }
-
-            # 检查 TMDN 结果的匹配
-            exact_matches = self._check_exact_match(query_name, tmdn_result["brands"])
+            # 2.1 总是先查询TMDN（支持多区域）
+            search_steps.append({
+                "source": "TMDN",
+                "checker": self.tmdn_checker,
+                "regions": regions.copy()
+            })
             
-            if exact_matches:
-                # TMDN 找到完全匹配，返回结果
-                return {
-                    "query_name": query_name,
-                    "status": "success",
-                    "status_message": QUERY_STATUS["EXACT_MATCH"],
-                    "brands": tmdn_result["brands"],
-                    "total_found": tmdn_result["total_found"],
-                    "has_exact_match": True,
-                    "exact_matches": exact_matches,
-                    "search_source": ["TMDN"],
-                    "search_params": tmdn_result["search_params"]
-                }
-
-            # 3. TMDN 未找到完全匹配，继续查询 WIPO
-            logging.info("TMDN未找到匹配，继续查询WIPO...")
-            wipo_result = self.wipo_checker.search_trademark(query_name, nice_class, region)
+            # 2.2 然后查询美国（如果选中）
+            if "美国" in regions:
+                search_steps.append({
+                    "source": "US",
+                    "checker": self.us_checker,
+                    "regions": ["美国"]
+                })
             
-            if wipo_result["status"] != "success":
-                error_msg = f"WIPO查询失败: {wipo_result.get('error_message', '未知错误')}"
-                logging.error(error_msg)
-                return {
-                    "query_name": query_name,
-                    "status": "error",
-                    "error_message": error_msg,
-                    "brands": tmdn_result["brands"],
-                    "total_found": tmdn_result["total_found"],
-                    "has_exact_match": False,
-                    "exact_matches": [],
-                    "search_source": ["TMDN", "WIPO"],
-                    "search_params": wipo_result["search_params"]
-                }
-
-            # 合并结果
-            all_brands = list(set(tmdn_result["brands"] + wipo_result["brands"]))
-            total_found = tmdn_result["total_found"] + wipo_result["total_found"]
+            # 2.3 最后查询英国（如果选中）
+            if "英国" in regions:
+                search_steps.append({
+                    "source": "UK",
+                    "checker": self.uk_checker,
+                    "regions": ["英国"]
+                })
             
-            # 检查 WIPO 结果的完全匹配
-            wipo_exact_matches = self._check_exact_match(query_name, wipo_result["brands"])
-            all_exact_matches = list(set(exact_matches + wipo_exact_matches))
+            # 3. 按顺序执行查询（TMDN -> US -> UK）
+            searched_sources = []
+            for step in search_steps:
+                try:
+                    source_name = step["source"]
+                    checker = step["checker"]
+                    target_regions = step["regions"]
+                    
+                    logging.info(f"正在查询 {source_name} (区域: {', '.join(target_regions)})...")
+                    searched_sources.append(source_name)
+                    
+                    # 统一查询接口
+                    if source_name == "TMDN":
+                        result = checker.search_trademark(query_name, nice_classes, target_regions)
+                    else:
+                        result = checker.search_trademark(query_name, nice_classes)
+                    
+                    if result["success"] and result["data"]:
+                        brands = result["data"]["hits"]
+                        total = result["data"]["total"]
+                        
+                        # 检查是否存在完全匹配
+                        exact_matches = self._check_exact_match(query_name, brands)
+                        if exact_matches:
+                            return {
+                                "query_name": query_name,
+                                "status": "success",
+                                "status_message": QUERY_STATUS["EXACT_MATCH"],
+                                "brands": brands,
+                                "total_found": total,
+                                "has_exact_match": True,
+                                "exact_matches": exact_matches,
+                                "search_source": [source_name],
+                                "search_params": {
+                                    "region": ", ".join(target_regions),
+                                    "nice_class": nice_class_display,
+                                    "status": "已注册或待审"
+                                }
+                            }
+                except Exception as e:
+                    logging.error(f"{source_name}查询出错: {str(e)}")
+                    if source_name == "TMDN":
+                        # 如果TMDN查询失败，继续尝试其他查询
+                        continue
+                    else:
+                        # 如果是其他系统查询失败，返回错误
+                        return {
+                            "query_name": query_name,
+                            "status": "error",
+                            "error_message": str(e),
+                            "brands": [],
+                            "total_found": 0,
+                            "has_exact_match": False,
+                            "exact_matches": [],
+                            "search_source": [],
+                            "search_params": {
+                                "region": ", ".join(target_regions),
+                                "nice_class": nice_class_display,
+                                "status": "查询出错"
+                            }
+                        }
 
-            if wipo_exact_matches:
-                status_message = QUERY_STATUS["EXACT_MATCH"]
-            elif wipo_result["total_found"] > 15:
-                status_message = QUERY_STATUS["NEED_ATTENTION"]
-            else:
-                status_message = QUERY_STATUS["NO_MATCH"]
+            logging.info(f"当前查询顺序：{[step['source'] for step in search_steps]}")
 
+            # 所有系统都查询完成，未找到匹配
             return {
                 "query_name": query_name,
                 "status": "success",
-                "status_message": status_message,
-                "brands": sorted(all_brands),
-                "total_found": total_found,
-                "has_exact_match": bool(all_exact_matches),
-                "exact_matches": sorted(all_exact_matches),
-                "search_source": ["TMDN", "WIPO"],
-                "search_params": wipo_result["search_params"]
+                "status_message": QUERY_STATUS["NO_MATCH"],
+                "brands": [],
+                "total_found": 0,
+                "has_exact_match": False,
+                "exact_matches": [],
+                "search_source": searched_sources,
+                "search_params": {
+                    "region": ", ".join(regions),
+                    "nice_class": nice_class_display,
+                    "status": "已注册或待审"
+                }
             }
 
         except Exception as e:
@@ -172,8 +216,31 @@ class TrademarkChecker:
                 "exact_matches": [],
                 "search_source": [],
                 "search_params": {
-                    "region": region,
-                    "nice_class": f"{nice_class} - {self.nice_class_map.get(nice_class, '')}",
+                    "region": ", ".join(regions),
+                    "nice_class": nice_class_display,
                     "status": "查询出错"
                 }
             }
+
+def main():
+    """主函数，用于测试"""
+    checker = TrademarkChecker()
+    
+    # 测试单个区域和类别
+    print("\n测试单个区域和类别查询:")
+    result = checker.check_trademark("wangguan", "20", "美国")
+    print(f"找到 {result['total_found']} 个相关商标:")
+    if result['brands']:
+        for brand in result['brands']:
+            print(f"  - {brand}")
+    
+    # 测试多个区域和类别
+    print("\n测试多个区域和类别查询:")
+    result = checker.check_trademark("wangguan", ["14", "20"], ["美国", "欧盟", "英国"])
+    print(f"找到 {result['total_found']} 个相关商标:")
+    if result['brands']:
+        for brand in result['brands']:
+            print(f"  - {brand}")
+
+if __name__ == "__main__":
+    main()
