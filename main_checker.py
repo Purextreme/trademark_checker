@@ -161,6 +161,7 @@ class TrademarkChecker:
                                 time.sleep(5)  # 等待5秒后重试
                                 continue
                             else:  # 第二次失败
+                                logging.error(f"{source_name}第二次查询仍然出错: {error_msg}")
                                 return {
                                     "query_name": query_name,
                                     "status": "error",

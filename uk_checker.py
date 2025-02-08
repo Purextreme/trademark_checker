@@ -37,6 +37,10 @@ class UKChecker:
 
     def search_trademark(self, query_name: str, nice_classes: Union[str, List[str]]) -> Dict[str, Any]:
         """搜索英国商标"""
+        browser = None
+        context = None
+        page = None
+        
         try:
             with sync_playwright() as playwright:
                 # 修改浏览器启动配置
@@ -184,10 +188,31 @@ class UKChecker:
                     }
                 
         except Exception as e:
+            # 确保资源被清理
+            try:
+                if page:
+                    page.close()
+                if context:
+                    context.close()
+                if browser:
+                    browser.close()
+            except:
+                pass
             return {
                 "success": False,
                 "error": str(e)
             }
+        finally:
+            # 再次确保资源被清理
+            try:
+                if page:
+                    page.close()
+                if context:
+                    context.close()
+                if browser:
+                    browser.close()
+            except:
+                pass
 
 def main():
     """主函数，用于测试"""

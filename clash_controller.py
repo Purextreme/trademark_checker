@@ -12,7 +12,12 @@ class ClashController:
         """
         self.api_url = api_url
         self.setup_logging()
-        self.test_url = "https://tmsearch.uspto.gov/"  # USPTO测试URL
+        # 使用更安全的测试URL
+        self.test_urls = [
+            "https://www.google.com",  # 主要测试URL
+            "https://www.cloudflare.com",  # 备用测试URL
+            "https://www.microsoft.com"  # 备用测试URL
+        ]
         
     def setup_logging(self):
         """配置日志输出"""
@@ -49,8 +54,10 @@ class ClashController:
             int: 延迟时间（毫秒），-1表示测试失败
         """
         try:
+            # 随机选择一个测试URL，避免对单一网站发送过多请求
+            test_url = random.choice(self.test_urls)
             response = requests.get(f"{self.api_url}/proxies/{proxy_name}/delay", 
-                                  params={"url": self.test_url, "timeout": 5000})
+                                  params={"url": test_url, "timeout": 5000})
             if response.status_code == 200:
                 return response.json().get("delay", -1)
             return -1
@@ -91,12 +98,8 @@ class ClashController:
             and not "自动" in proxy
             and not "故障" in proxy
             and not "负载" in proxy
-            and not "Error" in proxy  # 排除错误节点
-            and not "Cherry" in proxy  # 排除Cherry Network节点
-            and not "CN" in proxy     # 排除可能的Cherry Network简写
-            and not "台灣" in proxy   # 排除台湾节点
-            and not "台湾" in proxy   # 排除台湾节点（简体）
-            and not "TW" in proxy     # 排除台湾节点缩写
+            and not "🇭🇰 香港 04" in proxy  # 排除错误节点
+            and not "Cherry" in proxy# 排除Cherry Network节点
         ]
         
         self.logger.info(f"找到 {len(filtered_proxies)} 个可用节点")
@@ -132,7 +135,7 @@ class ClashController:
             interval: 切换间隔（秒）
         """
         self.logger.info(f"开始自动切换节点 (组: {group_name}, 间隔: {interval}秒)")
-        self.logger.info(f"目标网站: {self.test_url}")
+        self.logger.info(f"目标网站: {self.test_urls}")
         
         current_proxy = None  # 记录当前使用的节点
         

@@ -107,10 +107,15 @@ class UKCheckerProcess:
         self.input_queue = None
         self.output_queue = None
         self.process = None
+        self._is_stopping = False  # 新增状态标记
         # 不在初始化时启动进程
     
     def start_process(self):
         """启动UK查询进程"""
+        if self._is_stopping:
+            logging.warning("进程正在停止中，请稍后再试")
+            return
+            
         if self.process is None or not self.process.is_alive():
             try:
                 self.process, self.input_queue, self.output_queue = run_uk_process()
@@ -130,17 +135,25 @@ class UKCheckerProcess:
     
     def stop_process(self):
         """停止UK查询进程"""
-        if self.process and self.process.is_alive():
-            try:
-                self.input_queue.put("STOP")
-                self.process.join(timeout=5)  # 等待进程结束，最多等待5秒
-                if self.process.is_alive():
-                    self.process.terminate()  # 如果进程没有正常结束，强制终止
-                logging.info("UK查询进程已停止")
-            except Exception as e:
-                error_stack = traceback.format_exc()
-                error_msg = f"停止UK查询进程失败: {str(e)}\n{error_stack}"
-                logging.error(error_msg)
+        if self._is_stopping:  # 防止重复停止
+            return
+            
+        self._is_stopping = True
+        try:
+            if self.process and self.process.is_alive():
+                try:
+                    self.input_queue.put("STOP")
+                    for _ in range(3):  # 最多等待3次
+                        if self.process.join(timeout=2):  # 每次等待2秒
+                            break
+                    if self.process.is_alive():
+                        logging.warning("UK查询进程未能正常停止，将在下次查询时重新创建")
+                    else:
+                        logging.info("UK查询进程已正常停止")
+                except Exception as e:
+                    logging.error(f"停止UK查询进程时出错: {str(e)}")
+        finally:
+            self._is_stopping = False
     
     def search_trademark(self, query_name: str, nice_classes: Any) -> Dict[str, Any]:
         """发送查询请求并等待结果
@@ -152,6 +165,12 @@ class UKCheckerProcess:
         Returns:
             查询结果字典
         """
+        if self._is_stopping:
+            return {
+                "success": False,
+                "error": "进程正在停止中，请稍后重试"
+            }
+            
         try:
             # 确保进程在运行
             self.start_process()
@@ -165,7 +184,13 @@ class UKCheckerProcess:
             # 等待结果（设置60秒超时，因为UK查询可能比较慢）
             try:
                 result = self.output_queue.get(timeout=60)
-                return result
+                # 确保返回格式一致
+                if isinstance(result, dict) and "success" in result:
+                    return result
+                return {
+                    "success": False,
+                    "error": "返回格式错误"
+                }
             except queue.Empty:
                 error_msg = "UK查询超时（60秒）"
                 logging.error(error_msg)
