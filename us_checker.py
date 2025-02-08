@@ -12,7 +12,6 @@ class USChecker:
         self.config = US_CONFIG
         self.logger = logging.getLogger("USChecker")
         self.logger.setLevel(logging.INFO)
-        self.session = requests.Session()
         self.waf_token = None
         self.session_storage = None
         self.last_telemetry_time = 0
@@ -122,7 +121,7 @@ class USChecker:
                 ]
             }
             
-            response = self.session.post(
+            response = requests.post(
                 'https://tmsearch.uspto.gov/api-v1-0-0/telemetry',
                 headers=headers,
                 json=data,
@@ -184,8 +183,8 @@ class USChecker:
             # 发送telemetry
             self._send_telemetry()
             
-            # 发送请求
-            response = self.session.post(
+            # 发送请求（使用一次性连接）
+            response = requests.post(
                 'https://tmsearch.uspto.gov/api-v1-0-0/tmsearch',
                 headers=headers,
                 json=payload,
@@ -250,10 +249,10 @@ class USChecker:
 
 def test_continuous_query():
     """测试连续查询的稳定性
-    - 每次查询间隔2分钟
-    - 每次查询使用新的连接
-    - 记录详细的时间和结果
+    - 每次查询间隔5秒
+    - 每次查询都是新的会话（模拟重新打开页面）
     """
+    # 设置日志级别为DEBUG以查看详细信息
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(message)s',
@@ -262,29 +261,49 @@ def test_continuous_query():
     
     # 测试词列表
     test_words = [
-        'monica', 'james', 'apple', 'orange', 'delta',
-        'sigma', 'alpha', 'beta', 'gamma', 'omega'
+        # 常见英文名
+        'monica', 'james', 'david', 'sarah', 'emma',
+        # 科技公司
+        'apple', 'google', 'tesla', 'oracle', 'cisco',
+        # 希腊字母
+        'alpha', 'beta', 'delta', 'sigma', 'omega',
+        # 颜色和自然
+        'azure', 'coral', 'forest', 'river', 'stone'
     ]
     
     logger = logging.getLogger("US_TEST")
-    query_interval = 120  # 查询间隔2分钟
+    query_interval = 5  # 查询间隔5秒
     
     logger.info(f"\n开始连续查询测试:")
-    logger.info(f"测试词列表: {', '.join(test_words)}")
-    logger.info(f"查询间隔: {query_interval}秒（2分钟）")
+    logger.info(f"总测试词数: {len(test_words)}")
+    logger.info(f"查询间隔: {query_interval}秒")
+    logger.info("测试词列表（按类别）:")
+    logger.info("常见英文名:")
+    for word in test_words[0:5]:
+        logger.info(f"  - {word}")
+    logger.info("科技公司:")
+    for word in test_words[5:10]:
+        logger.info(f"  - {word}")
+    logger.info("希腊字母:")
+    for word in test_words[10:15]:
+        logger.info(f"  - {word}")
+    logger.info("颜色和自然:")
+    for word in test_words[15:20]:
+        logger.info(f"  - {word}")
     logger.info("=" * 50)
     
     success_count = 0
     error_count = 0
     total_wait_time = 0
     
+    # 遍历每个测试词
     for i, current_word in enumerate(test_words):
         try:
             logger.info(f"\n第 {i + 1} 个词开始查询...")
             logger.info(f"查询词: {current_word}")
             start_time = time.time()
             
-            # 每次查询都创建新的查询器实例
+            # 每次查询都创建新的查询器实例（模拟新开页面）
             checker = USChecker()
             
             # 执行查询
@@ -301,7 +320,7 @@ def test_continuous_query():
                         logger.info(f"  - {brand}")
             else:
                 error_count += 1
-                logger.error(f"查询失败 ({current_word}): {result['error']}")
+                logger.error(f"查询失败 ({current_word}): {result.get('error', '未知错误')}")
             
             # 计算实际用时
             elapsed = time.time() - start_time
@@ -330,10 +349,8 @@ def test_continuous_query():
     logger.info(f"成功次数: {success_count}")
     logger.info(f"失败次数: {error_count}")
     logger.info(f"成功率: {(success_count/len(test_words))*100:.1f}%")
-    logger.info(f"查询间隔: {query_interval}秒（2分钟）")
+    logger.info(f"查询间隔: {query_interval}秒")
     logger.info(f"平均等待时间: {total_wait_time/(len(test_words)-1):.1f}秒")
-    logger.info("\n查询词统计:")
-    logger.info(f"测试词: {', '.join(test_words)}")
 
 def main():
     """主函数，用于测试"""

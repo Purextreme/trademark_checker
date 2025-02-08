@@ -2,6 +2,7 @@ import requests
 import logging
 from typing import Dict, Any, List, Union
 from config import TMDN_CONFIG, NICE_CLASS_MAP, QUERY_PARAMS
+import time
 
 class TMDNNameChecker:
     def __init__(self):
@@ -130,24 +131,92 @@ class TMDNNameChecker:
             }
 
 def main():
-    """主函数，用于测试"""
+    """主函数，用于测试连续查询"""
+    # 设置日志级别为DEBUG以查看详细信息
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    
+    # 测试词列表（30个不同的词）
+    test_words = [
+        'monica', 'james', 'apple', 'orange', 'delta',
+        'sigma', 'alpha', 'beta', 'gamma', 'omega',
+        'zeta', 'theta', 'iota', 'kappa', 'lambda',
+        'nike', 'adidas', 'puma', 'reebok', 'fila',
+        'sony', 'samsung', 'apple', 'huawei', 'xiaomi',
+        'ford', 'toyota', 'honda', 'bmw', 'audi'
+    ]
+    
+    logger = logging.getLogger("TMDN_TEST")
+    query_interval = 5  # 查询间隔5秒
+    
+    logger.info(f"\n开始连续查询测试:")
+    logger.info(f"总测试词数: {len(test_words)}")
+    logger.info(f"查询间隔: {query_interval}秒")
+    logger.info("测试词列表:")
+    for i, word in enumerate(test_words, 1):
+        logger.info(f"{i}. {word}")
+    logger.info("=" * 50)
+    
     checker = TMDNNameChecker()
+    success_count = 0
+    error_count = 0
+    total_wait_time = 0
     
-    # 测试单个类别查询
-    print("\n测试单个类别查询:")
-    result = checker.search_trademark("monica", "20", "美国")
-    print(f"找到 {result['total_found']} 个相关商标:")
-    if result['brands']:
-        for brand in result['brands']:
-            print(f"  - {brand}")
+    # 遍历每个测试词
+    for i, current_word in enumerate(test_words):
+        try:
+            logger.info(f"\n第 {i + 1} 个词开始查询...")
+            logger.info(f"查询词: {current_word}")
+            start_time = time.time()
+            
+            # 执行查询（使用美国区域和类别20）
+            result = checker.search_trademark(current_word, "20", "美国")
+            
+            # 记录查询结果
+            if result["success"]:
+                success_count += 1
+                if result.get("data") == "NO_RESULTS":
+                    logger.info(f"查询成功: {current_word} 未找到结果")
+                else:
+                    logger.info(f"查询成功: {current_word} 找到 {len(result['data'])} 个商标")
+                    for brand in result["data"]:
+                        logger.info(f"  - {brand}")
+            else:
+                error_count += 1
+                logger.error(f"查询失败 ({current_word}): {result.get('error', '未知错误')}")
+            
+            # 计算实际用时
+            elapsed = time.time() - start_time
+            logger.info(f"本次查询耗时: {elapsed:.2f}秒")
+            
+            # 如果不是最后一个词，等待查询间隔
+            if i < len(test_words) - 1:
+                wait_time = max(0, query_interval - elapsed)
+                logger.info(f"等待 {wait_time:.2f} 秒后进行下一次查询...")
+                logger.info(f"下一个查询词将是: {test_words[i+1]}")
+                time.sleep(wait_time)
+                total_wait_time += wait_time
+            
+        except Exception as e:
+            error_count += 1
+            logger.error(f"发生异常 ({current_word}): {str(e)}")
+            if i < len(test_words) - 1:
+                logger.info(f"等待 {query_interval} 秒后继续...")
+                time.sleep(query_interval)
+                total_wait_time += query_interval
     
-    # 测试多个类别查询
-    print("\n测试多个类别查询:")
-    result = checker.search_trademark("monica", ["14", "20"], "欧盟")
-    print(f"找到 {result['total_found']} 个相关商标:")
-    if result['brands']:
-        for brand in result['brands']:
-            print(f"  - {brand}")
+    # 输出统计信息
+    logger.info("\n测试完成!")
+    logger.info("=" * 50)
+    logger.info(f"总查询次数: {len(test_words)}")
+    logger.info(f"成功次数: {success_count}")
+    logger.info(f"失败次数: {error_count}")
+    logger.info(f"成功率: {(success_count/len(test_words))*100:.1f}%")
+    logger.info(f"查询间隔: {query_interval}秒")
+    logger.info(f"平均等待时间: {total_wait_time/(len(test_words)-1):.1f}秒")
 
 if __name__ == "__main__":
     main() 
