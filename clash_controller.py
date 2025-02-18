@@ -98,7 +98,6 @@ class ClashController:
             and not "自动" in proxy
             and not "故障" in proxy
             and not "负载" in proxy
-            and not "🇭🇰 香港 04" in proxy  # 排除错误节点
             and not "Cherry" in proxy# 排除Cherry Network节点
         ]
         
